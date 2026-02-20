@@ -15,6 +15,7 @@ from tests.tt_eager.python_api_testing.sweep_tests import (
 from tests.tt_eager.python_api_testing.sweep_tests.run_pytorch_ci_tests import (
     run_single_pytorch_test,
 )
+from tests.ttnn.utils_for_testing import assert_with_pcc
 
 mem_configs = [
     ttnn.DRAM_MEMORY_CONFIG,
@@ -284,3 +285,60 @@ def test_typecast_bfp8_b_to_fp32(device):
     # print(cpu_version[0, 0:16])
     # print(npu_version[0, 0:16])
     assert passed
+
+
+@pytest.mark.parametrize("tile_h", [1, 2, 4, 8, 16, 32])
+@pytest.mark.parametrize("tile_w", [16, 32])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat4_b])
+@pytest.mark.parametrize("transpose_tile", [True, False])
+@pytest.mark.parametrize("on_device", [True, False])
+def test_tiny_tiles_bfloat_on_device_conversion(device, tile_h, tile_w, dtype, transpose_tile, on_device, capsys):
+    if tile_h < 16 and transpose_tile:
+        pytest.skip("transpose tile does not support tile height less than 16")
+    # minimum tile_h = 4 for fbloat, as exponents are packed into uint32 (4 exponents minmum)
+    torch.manual_seed(0)
+    torch_input_tensor = torch.randn((64, 64), dtype=torch.bfloat16)
+
+    def verify_tensor():
+        output_tensor = ttnn.to_torch(input_tensor)
+
+        if dtype == ttnn.bfloat16 or dtype == ttnn.bfloat8_b:
+            expected_pcc = 0.9999
+        elif dtype == ttnn.bfloat4_b:
+            expected_pcc = 0.989
+
+        assert_with_pcc(torch_input_tensor, output_tensor, expected_pcc)
+
+    if on_device:
+        input_tensor = ttnn.from_torch(
+            torch_input_tensor,
+            tile=ttnn.Tile((tile_h, tile_w), transpose_tile=transpose_tile),
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+
+        with capsys.disabled():
+            print("After from_torch")
+        verify_tensor()
+        input_tensor = ttnn.to_device(input_tensor, device)
+        with capsys.disabled():
+            print("After to_device")
+        verify_tensor()
+        input_tensor = ttnn.to_layout(input_tensor, layout=ttnn.TILE_LAYOUT)
+        with capsys.disabled():
+            print("After to_layout")
+        verify_tensor()
+        input_tensor = ttnn.typecast(input_tensor, dtype=dtype)
+        with capsys.disabled():
+            print("After typecast")
+        verify_tensor()
+
+    else:
+        input_tensor = ttnn.from_torch(
+            torch_input_tensor,
+            tile=ttnn.Tile((tile_h, tile_w), transpose_tile=transpose_tile),
+            dtype=dtype,
+            device=device,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+
+        verify_tensor()
