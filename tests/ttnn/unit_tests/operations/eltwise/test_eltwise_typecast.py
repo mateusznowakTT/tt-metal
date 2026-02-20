@@ -381,6 +381,12 @@ def test_tiny_tiles_bfloat_on_device_conversion(device, tile_h, tile_w, dtype, t
         input_tensor = ttnn.typecast(input_tensor, dtype=dtype)
         with capsys.disabled():
             print("After typecast")
+
+        man_bits = 3 if dtype == ttnn.bfloat4_b else 7
+        expected = _simulate_bfp_quantization(torch_input_tensor, man_bits)
+        actual = ttnn.to_torch(input_tensor)
+        assert torch.equal(expected, actual), "Typecast result does not match simulated BFP quantization"
+
         verify_tensor()
 
     else:
