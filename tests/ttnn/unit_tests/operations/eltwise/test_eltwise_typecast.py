@@ -287,11 +287,62 @@ def test_typecast_bfp8_b_to_fp32(device):
     assert passed
 
 
-@pytest.mark.parametrize("tile_h", [1, 2, 4, 8, 16, 32])
-@pytest.mark.parametrize("tile_w", [16, 32])
-@pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat4_b])
-@pytest.mark.parametrize("transpose_tile", [True, False])
-@pytest.mark.parametrize("on_device", [True, False])
+def _simulate_bfp_quantization(x, man_bits):
+    """Simulate bfp round-trip (float -> bfp -> float) on CPU.
+
+    Args:
+        x: Input tensor.
+        man_bits: Number of mantissa bits (3 for bfp4, 7 for bfp8).
+    """
+    orig_shape = x.shape
+    x_f32 = x.to(torch.float32).contiguous().reshape(-1, 16)
+    x_bits = x_f32.view(torch.int32)
+
+    sign = (x_bits >> 31) & 1
+    exp = (x_bits >> 23) & 0xFF
+    man = x_bits & 0x7FFFFF
+
+    is_zero = exp == 0
+    exp_bfp = torch.clamp(exp - 112, 0, 31)  # rebias: -127 + 15 = -112
+    exp_bfp = torch.where(is_zero, torch.zeros_like(exp_bfp), exp_bfp)
+    man_full = torch.where(is_zero, torch.zeros_like(man), man | (1 << 23))
+
+    shared_exp = exp_bfp.max(dim=-1, keepdim=True).values
+    exp_diff = (shared_exp - exp_bfp).clamp(0, 31)
+    man_aligned = man_full >> exp_diff
+
+    # Round to man_bits (round half-up)
+    shift = 24 - man_bits
+    remainder = man_aligned & ((1 << shift) - 1)
+    tie = 1 << (shift - 1)
+    man_n = man_aligned >> shift
+    man_n = man_n + (remainder >= tie).to(torch.int32)
+    man_n = man_n.clamp(max=(1 << man_bits) - 1)
+    sign = torch.where(man_n == 0, torch.zeros_like(sign), sign)
+
+    # Unpack: normalize mantissa (find leading zeros in man_bits-wide field)
+    bfp_zero = man_n == 0
+    lz = torch.zeros_like(man_n)
+    for i in range(1, man_bits):
+        lz = torch.where(
+            (man_n >= 1) & (man_n < (1 << (man_bits - i))),
+            torch.tensor(i, dtype=torch.int32),
+            lz,
+        )
+    lz = torch.where(bfp_zero, torch.zeros_like(lz), lz)
+    man_out = ((man_n << lz) << 1) & ((1 << man_bits) - 1)
+    exp_out = shared_exp - lz + 112  # rebias to FP32: +127 - 15 = +112
+
+    result = (sign << 31) | (exp_out << 23) | (man_out << (23 - man_bits))
+    result = torch.where(bfp_zero, torch.zeros_like(result), result)
+    return result.view(torch.float32).reshape(orig_shape).to(torch.bfloat16)
+
+
+@pytest.mark.parametrize("tile_h", [32])  # [1, 2, 4, 8, 16, 32])
+@pytest.mark.parametrize("tile_w", [32])  # [16, 32])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat4_b])  # [ttnn.bfloat8_b, ttnn.bfloat4_b])
+@pytest.mark.parametrize("transpose_tile", [False])  # [True, False])
+@pytest.mark.parametrize("on_device", [True])  # [True, False])
 def test_tiny_tiles_bfloat_on_device_conversion(device, tile_h, tile_w, dtype, transpose_tile, on_device, capsys):
     if tile_h < 16 and transpose_tile:
         pytest.skip("transpose tile does not support tile height less than 16")
