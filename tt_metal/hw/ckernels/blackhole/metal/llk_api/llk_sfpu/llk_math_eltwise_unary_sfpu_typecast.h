@@ -177,6 +177,9 @@ inline void llk_math_eltwise_unary_sfpu_typecast_init() {
         out_format == DataFormat::UInt16) {
         llk_math_eltwise_unary_sfpu_init<SfpuType::typecast, APPROXIMATE>(
             ckernel::sfpu::init_typecast_fp32_to_uint16<APPROXIMATE>);
+    } else if constexpr (in_format == DataFormat::Float16_b && out_format == DataFormat::Bfp4_b) {
+        llk_math_eltwise_unary_sfpu_init<SfpuType::typecast, APPROXIMATE>(
+            ckernel::sfpu::init_typecast_fp16b_to_bfp4b<APPROXIMATE>);
     } else {
         llk_math_eltwise_unary_sfpu_init<SfpuType::typecast, APPROXIMATE>();
     }
