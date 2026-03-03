@@ -247,6 +247,8 @@ def test_unary_max_int32(device, tt_dtype, signed, scalar):
     if not signed:
         torch_input = torch_input.abs()
         scalar = abs(scalar)
+        if scalar > 2147483647:
+            pytest.skip("scalar overflows int32 for uint32 dtype")
     expected = torch.maximum(torch_input, torch.full(_SHAPE_4D, scalar, dtype=torch.int32))
 
     result = ttnn.to_torch(ttnn.maximum(_to_ttnn(torch_input, tt_dtype, device), scalar)).to(torch.int32)
@@ -263,6 +265,8 @@ def test_unary_min_int32(device, tt_dtype, signed, scalar):
     if not signed:
         torch_input = torch_input.abs()
         scalar = abs(scalar)
+        if scalar > 2147483647:
+            pytest.skip("scalar overflows int32 for uint32 dtype")
     expected = torch.minimum(torch_input, torch.full(_SHAPE_4D, scalar, dtype=torch.int32))
 
     result = ttnn.to_torch(ttnn.minimum(_to_ttnn(torch_input, tt_dtype, device), scalar)).to(torch.int32)
