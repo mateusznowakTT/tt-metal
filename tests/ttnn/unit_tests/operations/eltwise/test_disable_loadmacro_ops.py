@@ -153,14 +153,17 @@ def test_reduce_min(device, dim, tt_dtype, torch_dtype):
 
 
 def test_mul_int(device):
+    # Uses ttnn.uint16 to exercise ckernel_sfpu_mul_int.h (tt_llk path).
+    # int32 mul routes to ckernel_sfpu_mul_int32.h (tt_metal path, separate work).
     torch.manual_seed(0)
-    a = torch.arange(_N, dtype=torch.int32).reshape(_SHAPE_4D) - _N // 2
+    # Small values so product fits in uint16 [0, 65535]
+    a = (torch.arange(_N, dtype=torch.int32).reshape(_SHAPE_4D) % 100) + 1
     b = (torch.arange(_N, dtype=torch.int32).reshape(_SHAPE_4D) % 10) + 1
-    expected = ttnn.get_golden_function(ttnn.mul)(a, b, device=device)
+    expected = (a * b) & 0xFFFF
 
-    result = ttnn.to_torch(ttnn.mul(_to_ttnn(a, ttnn.int32, device), _to_ttnn(b, ttnn.int32, device)))
+    result = ttnn.to_torch(ttnn.mul(_to_ttnn(a, ttnn.uint16, device), _to_ttnn(b, ttnn.uint16, device)))
 
-    assert torch.equal(result, expected)
+    assert torch.equal(result.to(torch.int32), expected)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
