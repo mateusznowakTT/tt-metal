@@ -20,6 +20,60 @@ inline void mul_int32(const uint dst_index_in0, const uint dst_index_in1, const 
     uint offset_in1 = dst_index_in1 * dst_tile_size;
     uint offset_out = dst_index_out * dst_tile_size;
 
+#ifdef DISABLE_SFPLOADMACRO
+    // Non-LOADMACRO: sequential INT32 multiply via SFPMUL24.
+    //
+    // Computes: result = ((hi + cross0 + cross1) << 23) + lo  where:
+    //   a1     = a >> 23
+    //   b1     = b >> 23
+    //   cross0 = mul24_lo(a1, b)
+    //   cross1 = mul24_lo(a, b1)
+    //   lo     = mul24_lo(a, b)
+    //   hi     = mul24_hi(a, b)
+
+    constexpr uint a = p_sfpu::LREG0;
+    constexpr uint b = p_sfpu::LREG1;
+    constexpr uint a1 = p_sfpu::LREG2;   // a >> 23
+    constexpr uint b1 = p_sfpu::LREG3;   // b >> 23
+    constexpr uint acc = p_sfpu::LREG4;  // accumulator
+
+#pragma GCC unroll 8
+    for (int d = 0; d < ITERATIONS; d++) {
+        TT_SFPLOAD(a, InstrModLoadStore::INT32, ADDR_MOD_7, offset_in0);
+        TT_SFPLOAD(b, InstrModLoadStore::INT32, ADDR_MOD_7, offset_in1);
+
+        // a1 = a >> 23, b1 = b >> 23
+        TTI_SFPSHFT2(-23 & 0xfff, a, a1, sfpi::SFPSHFT2_MOD1_SHFT_IMM);
+        TTI_SFPSHFT2(-23 & 0xfff, b, b1, sfpi::SFPSHFT2_MOD1_SHFT_IMM);
+
+        // acc = mul24_lo(a1, b) = cross0
+        TTI_SFPMUL24(a1, b, p_sfpu::LCONST_0, acc, sfpi::SFPMUL24_MOD1_LOWER);
+        // b1 = mul24_lo(a, b1) = cross1  (reuse b1 register)
+        TTI_SFPMUL24(a, b1, p_sfpu::LCONST_0, b1, sfpi::SFPMUL24_MOD1_LOWER);
+        // a1 = mul24_hi(a, b) = hi  (reuse a1 register)
+        TTI_SFPMUL24(a, b, p_sfpu::LCONST_0, a1, sfpi::SFPMUL24_MOD1_UPPER);
+
+        // acc = hi + cross0 + cross1
+        TTI_SFPIADD(0, acc, a1, sfpi::SFPIADD_MOD1_CC_NONE);  // a1 = hi + cross0
+        TTI_SFPIADD(0, b1, a1, sfpi::SFPIADD_MOD1_CC_NONE);   // a1 = hi + cross0 + cross1
+
+        // acc = mul24_lo(a, b) = lo  (reuse acc)
+        TTI_SFPMUL24(a, b, p_sfpu::LCONST_0, acc, sfpi::SFPMUL24_MOD1_LOWER);
+
+        // a1 <<= 23
+        TTI_SFPSHFT2(23, a1, a1, sfpi::SFPSHFT2_MOD1_SHFT_IMM);
+
+        // result = a1 + lo
+        TTI_SFPIADD(0, acc, a1, sfpi::SFPIADD_MOD1_CC_NONE);  // a1 = result
+
+        TT_SFPSTORE(a1, InstrModLoadStore::INT32, ADDR_MOD_7, offset_out);
+        sfpi::dst_reg++;
+    }
+    TTI_SFPNOP;
+    TTI_SFPNOP;
+    TTI_SFPNOP;
+#else
+
     // This uses SFPLOADMACRO to achieve a throughput of 8 cycles per input row.
     //
     // Notation: [x] means scheduled by SFPLOADMACRO with VD=x.  Variables a0,
@@ -85,10 +139,14 @@ inline void mul_int32(const uint dst_index_in0, const uint dst_index_in1, const 
     TTI_SFPNOP;
     TTI_SFPNOP;
     TTI_SFPNOP;
+#endif  // DISABLE_SFPLOADMACRO
 }
 
 template <bool APPROXIMATION_MODE>
 inline void mul_int32_init() {
+#ifdef DISABLE_SFPLOADMACRO
+    // No macro setup needed; sequential path has no shared state.
+#else
     constexpr uint b1 = p_sfpu::LREG2;
     constexpr uint c = p_sfpu::LREG4;
 
@@ -177,6 +235,7 @@ inline void mul_int32_init() {
     //   UnitDelayKind: {1,1,1,1}, (WaitForElapsedInstructions=1)
     // }
     TTI_SFPCONFIG(0xff0, 8, 1);
+#endif  // DISABLE_SFPLOADMACRO
 }
 
 }  // namespace ckernel::sfpu

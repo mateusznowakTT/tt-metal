@@ -28,6 +28,16 @@ sfpi_inline void calculate_unary_max_min_float_body() {
 
 template <bool IS_MAX_OP = true, bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_unary_max_min(uint value) {
+    load_value_param_float(value);
+
+#ifdef DISABLE_SFPLOADMACRO
+    // Non-LOADMACRO: sequential load-swap-store.
+#pragma GCC unroll 8
+    for (int d = 0; d < ITERATIONS; d++) {
+        calculate_unary_max_min_float_body<IS_MAX_OP>();
+        sfpi::dst_reg++;
+    }
+#else
     // This uses SFPLOADMACRO to achieve a throughput of 2 cycles per input row.
     //
     // Notation: [x] means scheduled by SFPLOADMACRO with VD=x.
@@ -38,8 +48,6 @@ inline void calculate_unary_max_min(uint value) {
     //  1 | nop  | swap_minmax([a], v) |     |       |       |
     //  0 | ...  |                     |     |       |       |
     //  1 | ...  |                     |     |       | [a]   |
-
-    load_value_param_float(value);
     constexpr int offset = 0;
 
 #pragma GCC unroll 8
@@ -50,6 +58,7 @@ inline void calculate_unary_max_min(uint value) {
     }
     TTI_SFPNOP;
     TTI_SFPNOP;
+#endif
 }
 
 template <bool IS_UNSIGNED = false>
@@ -86,6 +95,14 @@ template <bool IS_MAX_OP = true, bool IS_UNSIGNED = false, bool APPROXIMATION_MO
 inline void calculate_unary_max_min_int32(uint value) {
     load_value_param_int<IS_UNSIGNED>(value);
 
+#ifdef DISABLE_SFPLOADMACRO
+    // Non-LOADMACRO: sequential load-op-store.
+#pragma GCC unroll 8
+    for (int d = 0; d < ITERATIONS; d++) {
+        calculate_unary_max_min_int32_body<IS_MAX_OP>(value);
+        sfpi::dst_reg++;
+    }
+#else
     constexpr int offset = 0;
 
     if (IS_UNSIGNED ^ ((int)value < 0)) {
@@ -135,10 +152,12 @@ inline void calculate_unary_max_min_int32(uint value) {
     }
     TTI_SFPNOP;
     TTI_SFPNOP;
+#endif
 }
 
 template <bool IS_MAX_OP = true>
 inline void unary_max_min_init() {
+#ifndef DISABLE_SFPLOADMACRO
     // InstructionTemplate[0]
     TTI_SFPSWAP(
         0,
@@ -164,10 +183,12 @@ inline void unary_max_min_init() {
     //   UnitDelayKind: {1}, (WaitForElapsedInstructions=1)
     // }
     TTI_SFPCONFIG(0x110, 8, 1);
+#endif
 }
 
 template <bool IS_MAX_OP = true, bool IS_UNSIGNED = false>
 inline void unary_max_min_int32_init() {
+#ifndef DISABLE_SFPLOADMACRO
     // InstructionTemplate[0]
     TTI_SFPSWAP(
         0,
@@ -208,5 +229,6 @@ inline void unary_max_min_int32_init() {
     //   UnitDelayKind: {1,1}, (WaitForElapsedInstructions=1)
     // }
     TTI_SFPCONFIG(0x330, 8, 1);
+#endif
 }
 }  // namespace ckernel::sfpu
