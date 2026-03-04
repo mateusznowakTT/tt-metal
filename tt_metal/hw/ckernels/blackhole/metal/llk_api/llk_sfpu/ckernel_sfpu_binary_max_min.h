@@ -22,17 +22,22 @@ inline void calculate_binary_max_min(const uint dst_index_in0, const uint dst_in
     const uint offset2 = dst_index_out * dst_tile_size;
 
 #ifdef DISABLE_SFPLOADMACRO
-    // Non-LOADMACRO: sequential load-swap-store.
-    constexpr int a = p_sfpu::LREG0;
-    constexpr int b = p_sfpu::LREG1;
+    // Non-LOADMACRO: sequential load-compare-store using sfpi vFloat API.
+    constexpr uint sfpi_tile_size = 32;
 
 #pragma GCC unroll 8
     for (int i = 0; i < ITERATIONS; ++i) {
-        TT_SFPLOAD(a, InstrModLoadStore::DEFAULT, ADDR_MOD_7, offset0);
-        TT_SFPLOAD(b, InstrModLoadStore::DEFAULT, ADDR_MOD_7, offset1);
-        // After SFPSWAP: VD=a gets max (mod1=9) or min (mod1=8); VC=b gets the other.
-        TTI_SFPSWAP(0, b, a, IS_MAX_OP ? 9 : sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
-        TT_SFPSTORE(a, InstrModLoadStore::DEFAULT, ADDR_MOD_7, offset2);
+        sfpi::vFloat a = sfpi::dst_reg[dst_index_in0 * sfpi_tile_size];
+        sfpi::vFloat b = sfpi::dst_reg[dst_index_in1 * sfpi_tile_size];
+        sfpi::vFloat result = a;
+        if constexpr (IS_MAX_OP) {
+            v_if(a < b) { result = b; }
+            v_endif;
+        } else {
+            v_if(b < a) { result = b; }
+            v_endif;
+        }
+        sfpi::dst_reg[dst_index_out * sfpi_tile_size] = result;
         sfpi::dst_reg++;
     }
 #else
@@ -118,7 +123,13 @@ inline void calculate_binary_max_min_int32(
             TTI_SFPSETCC(0, sign_a, 0, sfpi::SFPSETCC_MOD1_LREG_EQ0);  // CC = diff-sign && a<2^31
         }
         TTI_SFPLOADI(flag, sfpi::SFPLOADI_MOD0_USHORT, 0x01);  // flag=1 where a<b (diff-sign)
-        TTI_SFPENCC(0, 0, 0, 0);                               // end CC region; flag = is_a_less_than_b (0 or 1)
+        TTI_SFPENCC(0, 0, 0, 0);  // end CC region; flag = is_a_less_than_b (0, 1, or 0xFFFFFFFF)
+
+        // Normalize flag to 0 or 1: same-sign a<b produces flag=0xFFFFFFFF via SFPSHFT(-31),
+        // but we need flag=1 so that -flag = 0xFFFFFFFF (mask), not -(0xFFFFFFFF)=1.
+        TTI_SFPSETCC(0, flag, 0, sfpi::SFPSETCC_MOD1_LREG_NE0);
+        TTI_SFPLOADI(flag, sfpi::SFPLOADI_MOD0_USHORT, 0x01);
+        TTI_SFPENCC(0, 0, 0, 0);
 
         // Generate mask = -flag: 0x00000000 if a>=b, 0xFFFFFFFF if a<b
         TTI_SFPLOADI(diff, sfpi::SFPLOADI_MOD0_USHORT, 0x00);  // diff = 0

@@ -22,16 +22,23 @@ inline void calculate_binary_max_min(const uint dst_index_in0, const uint dst_in
     const uint offset2 = dst_index_out * dst_tile_size;
 
 #ifdef DISABLE_SFPLOADMACRO
-    // Non-LOADMACRO: sequential load-swap-store.
-    constexpr int a = p_sfpu::LREG0;
-    constexpr int b = p_sfpu::LREG1;
+    // Non-LOADMACRO: sequential load-compare-store using sfpi vFloat API.
+    // Uses sfpi comparison instead of SFPSWAP to avoid pipeline hazards with two fresh loads.
+    constexpr uint sfpi_tile_size = 32;
 
 #pragma GCC unroll 8
     for (int i = 0; i < ITERATIONS; ++i) {
-        TT_SFPLOAD(a, InstrModLoadStore::DEFAULT, ADDR_MOD_7, offset0);
-        TT_SFPLOAD(b, InstrModLoadStore::DEFAULT, ADDR_MOD_7, offset1);
-        TTI_SFPSWAP(0, b, a, IS_MAX_OP ? 9 : sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
-        TT_SFPSTORE(a, InstrModLoadStore::DEFAULT, ADDR_MOD_7, offset2);
+        sfpi::vFloat a = sfpi::dst_reg[dst_index_in0 * sfpi_tile_size];
+        sfpi::vFloat b = sfpi::dst_reg[dst_index_in1 * sfpi_tile_size];
+        sfpi::vFloat result = a;
+        if constexpr (IS_MAX_OP) {
+            v_if(a < b) { result = b; }
+            v_endif;
+        } else {
+            v_if(b < a) { result = b; }
+            v_endif;
+        }
+        sfpi::dst_reg[dst_index_out * sfpi_tile_size] = result;
         sfpi::dst_reg++;
     }
 #else
@@ -86,8 +93,8 @@ inline void calculate_binary_max_min_int32(
 
 #pragma GCC unroll 8
     for (int i = 0; i < ITERATIONS; ++i) {
-        TT_SFPLOAD(a, InstrModLoadStore::INT32, ADDR_MOD_7, offset0);
-        TT_SFPLOAD(flag, InstrModLoadStore::INT32, ADDR_MOD_7, offset1);
+        TT_SFPLOAD(a, InstrModLoadStore::INT32, ADDR_MOD_3, offset0);
+        TT_SFPLOAD(flag, InstrModLoadStore::INT32, ADDR_MOD_3, offset1);
 
         TTI_SFPMOV(0, flag, b_copy, 0);
 
@@ -110,6 +117,14 @@ inline void calculate_binary_max_min_int32(
         TTI_SFPLOADI(flag, sfpi::SFPLOADI_MOD0_USHORT, 0x01);
         TTI_SFPENCC(0, 0, 0, 0);
 
+        // Normalize flag: same-sign a<b path sets flag=0xFFFFFFFF (via SFPSHFT(-31) of negative
+        // a-b), diff-sign a<b path sets flag=0x00000001. Normalize to 0 or 1 so that -flag gives
+        // the correct mask (0 or 0xFFFFFFFF). Without this, -(0xFFFFFFFF) = 1, not 0xFFFFFFFF.
+        TTI_SFPSETCC(0, flag, 0, sfpi::SFPSETCC_MOD1_LREG_NE0);
+        TTI_SFPLOADI(flag, sfpi::SFPLOADI_MOD0_USHORT, 0x01);  // flag = 1 wherever flag != 0
+        TTI_SFPENCC(0, 0, 0, 0);
+
+        // Generate mask: -flag gives 0x00000000 (a>=b) or 0xFFFFFFFF (a<b).
         TTI_SFPLOADI(diff, sfpi::SFPLOADI_MOD0_USHORT, 0x00);
         TTI_SFPIADD(0, diff, flag, sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
         TTI_SFPNOT(0, flag, sign_a, 0);
@@ -123,7 +138,7 @@ inline void calculate_binary_max_min_int32(
         }
         TTI_SFPOR(0, b_copy, a, 0);
 
-        TT_SFPSTORE(a, InstrModLoadStore::INT32, ADDR_MOD_7, offset2);
+        TT_SFPSTORE(a, InstrModLoadStore::INT32, ADDR_MOD_3, offset2);
         sfpi::dst_reg++;
     }
 #else
