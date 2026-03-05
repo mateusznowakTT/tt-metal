@@ -16,29 +16,18 @@ namespace sfpu {
 
 template <bool IS_MAX_OP = true, int ITERATIONS = 8>
 inline void calculate_binary_max_min(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
-    constexpr uint dst_tile_size = 64;
-    const uint offset0 = dst_index_in0 * dst_tile_size;
-    const uint offset1 = dst_index_in1 * dst_tile_size;
-    const uint offset2 = dst_index_out * dst_tile_size;
+    uint offset0 = (dst_index_in0 * 32) << 1;
+    uint offset1 = (dst_index_in1 * 32) << 1;
+    uint offset2 = (dst_index_out * 32) << 1;
 
 #ifdef DISABLE_SFPLOADMACRO
-    // Non-LOADMACRO: sequential load-compare-store using sfpi vFloat API.
-    constexpr uint sfpi_tile_size = 32;
-
-#pragma GCC unroll 8
-    for (int i = 0; i < ITERATIONS; ++i) {
-        sfpi::vFloat a = sfpi::dst_reg[dst_index_in0 * sfpi_tile_size];
-        sfpi::vFloat b = sfpi::dst_reg[dst_index_in1 * sfpi_tile_size];
-        sfpi::vFloat result = a;
-        if constexpr (IS_MAX_OP) {
-            v_if(a < b) { result = b; }
-            v_endif;
-        } else {
-            v_if(b < a) { result = b; }
-            v_endif;
-        }
-        sfpi::dst_reg[dst_index_out * sfpi_tile_size] = result;
-        sfpi::dst_reg++;
+#pragma GCC unroll 0
+    for (int d = 0; d < ITERATIONS; d++) {
+        // Swap and store maximum in lreg1, minimum in lreg0
+        TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_7, offset0);
+        TT_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::DEFAULT, ADDR_MOD_7, offset1);
+        TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG0, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
+        TT_SFPSTORE(IS_MAX_OP ? p_sfpu::LREG1 : p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_6, offset2);
     }
 #else
     // This uses SFPLOADMACRO to achieve a throughput of 3 cycles per input row.
@@ -53,9 +42,6 @@ inline void calculate_binary_max_min(const uint dst_index_in0, const uint dst_in
     // 0 | ...  |                     |     |           |         |
     // 1 | ...  |                     |     | L16 = [a] |         |
     // 2 | ...  |                     |     |           | [c] L16 |
-    const uint lm_offset0 = (dst_index_in0 * 32) << 1;
-    const uint lm_offset1 = (dst_index_in1 * 32) << 1;
-    const uint lm_offset2 = (dst_index_out * 32) << 1;
 
     constexpr int b = p_sfpu::LREG2;
     constexpr int c = p_sfpu::LREG3;
@@ -63,9 +49,9 @@ inline void calculate_binary_max_min(const uint dst_index_in0, const uint dst_in
 #pragma GCC unroll 8
     for (int i = 0; i < ITERATIONS; ++i) {
         int a = i & 1;  // alternate between p_sfpu::LREG0 and p_sfpu::LREG1
-        TT_SFPLOADMACRO((0 << 2) | (a & 3), InstrModLoadStore::DEFAULT, ADDR_MOD_7, lm_offset0 | (a >> 2));
-        TT_SFPLOAD(b, InstrModLoadStore::DEFAULT, ADDR_MOD_7, lm_offset1);
-        TT_SFPLOADMACRO((1 << 2) | (c & 3), InstrModLoadStore::DEFAULT, ADDR_MOD_6, lm_offset2 | (c >> 2));
+        TT_SFPLOADMACRO((0 << 2) | (a & 3), InstrModLoadStore::DEFAULT, ADDR_MOD_7, offset0 | (a >> 2));
+        TT_SFPLOAD(b, InstrModLoadStore::DEFAULT, ADDR_MOD_7, offset1);
+        TT_SFPLOADMACRO((1 << 2) | (c & 3), InstrModLoadStore::DEFAULT, ADDR_MOD_6, offset2 | (c >> 2));
     }
 
     TTI_SFPNOP;
@@ -77,81 +63,25 @@ inline void calculate_binary_max_min(const uint dst_index_in0, const uint dst_in
 template <bool IS_MAX_OP = true, bool IS_UNSIGNED = false, int ITERATIONS = 8>
 inline void calculate_binary_max_min_int32(
     const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
-    constexpr uint dst_tile_size = 64;
-    const uint offset0 = dst_index_in0 * dst_tile_size;
-    const uint offset1 = dst_index_in1 * dst_tile_size;
-    const uint offset2 = dst_index_out * dst_tile_size;
+    uint offset0 = (dst_index_in0 * 32) << 1;
+    uint offset1 = (dst_index_in1 * 32) << 1;
+    uint offset2 = (dst_index_out * 32) << 1;
 
 #ifdef DISABLE_SFPLOADMACRO
-    // Non-LOADMACRO: sequential overflow-safe signed/unsigned comparison + masked selection.
-    //
-    // Computes is_a_less_than_b flag using the same CC-predicated technique as
-    // calculate_binary_comp_int32, then selects a or b based on the flag.
+#pragma GCC unroll 0
+    for (int d = 0; d < ITERATIONS; d++) {
+        // Swap and store maximum in lreg1, minimum in lreg0 (or reversed if unsigned)
+        TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, offset0);
+        TT_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::INT32, ADDR_MOD_7, offset1);
+        TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG0, IS_UNSIGNED ? 9 : sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
 
-    // Register allocation:
-    constexpr int a = p_sfpu::LREG0;       // operand a (from in0)
-    constexpr int flag = p_sfpu::LREG1;    // operand b, then is_a_less_than_b flag, then mask
-    constexpr int sign_a = p_sfpu::LREG2;  // bit31(a), later reused as ~mask
-    constexpr int diff = p_sfpu::LREG3;    // diff_sign = bit31(a) XOR bit31(b)
-    constexpr int b_copy = p_sfpu::LREG4;  // preserved copy of b
-
-#pragma GCC unroll 8
-    for (int i = 0; i < ITERATIONS; ++i) {
-        TT_SFPLOAD(a, InstrModLoadStore::INT32, ADDR_MOD_7, offset0);
-        TT_SFPLOAD(flag, InstrModLoadStore::INT32, ADDR_MOD_7, offset1);  // flag = b
-
-        TTI_SFPMOV(0, flag, b_copy, 0);  // b_copy = b (save before overwriting)
-
-        // Extract bit31 of a and b for sign/overflow check
-        TTI_SFPMOV(0, a, sign_a, 0);
-        TTI_SFPMOV(0, flag, diff, 0);
-        TTI_SFPSHFT((-31) & 0xfff, sign_a, sign_a, 1);  // sign_a = bit31(a)
-        TTI_SFPSHFT((-31) & 0xfff, diff, diff, 1);      // diff   = bit31(b)
-        TTI_SFPXOR(0, sign_a, diff, 0);                 // diff = bit31(a) XOR bit31(b)
-
-        // CC region:
-        // Same-sign path (diff == 0): flag = a - b, then extract sign bit
-        TTI_SFPSETCC(0, diff, 0, sfpi::SFPSETCC_MOD1_LREG_EQ0);
-        TTI_SFPIADD(0, a, flag, sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
-        TTI_SFPSHFT((-31) & 0xfff, flag, flag, 1);  // flag = sign(a-b): 1 if a<b
-        // Diff-sign path: flag = sign bit that indicates a<b
-        TTI_SFPCOMPC(0, 0, 0, 0);                              // CC = diff-sign
-        TTI_SFPLOADI(flag, sfpi::SFPLOADI_MOD0_USHORT, 0x00);  // flag=0 (diff-sign default)
-        if constexpr (!IS_UNSIGNED) {
-            TTI_SFPSETCC(0, sign_a, 0, sfpi::SFPSETCC_MOD1_LREG_NE0);  // CC = diff-sign && a<0
-        } else {
-            TTI_SFPSETCC(0, sign_a, 0, sfpi::SFPSETCC_MOD1_LREG_EQ0);  // CC = diff-sign && a<2^31
-        }
-        TTI_SFPLOADI(flag, sfpi::SFPLOADI_MOD0_USHORT, 0x01);  // flag=1 where a<b (diff-sign)
-        TTI_SFPENCC(0, 0, 0, 0);  // end CC region; flag = is_a_less_than_b (0, 1, or 0xFFFFFFFF)
-
-        // Normalize flag to 0 or 1: same-sign a<b produces flag=0xFFFFFFFF via SFPSHFT(-31),
-        // but we need flag=1 so that -flag = 0xFFFFFFFF (mask), not -(0xFFFFFFFF)=1.
-        TTI_SFPSETCC(0, flag, 0, sfpi::SFPSETCC_MOD1_LREG_NE0);
-        TTI_SFPLOADI(flag, sfpi::SFPLOADI_MOD0_USHORT, 0x01);
+        // Conditionally swap again to fix the cases where SFPSWAP got the result backwards
+        TTI_SFPSETCC(0, p_sfpu::LREG0, 0, IS_UNSIGNED ? sfpi::SFPSETCC_MOD1_LREG_GTE0 : sfpi::SFPSETCC_MOD1_LREG_LT0);
+        TTI_SFPSETCC(0, p_sfpu::LREG1, 0, IS_UNSIGNED ? sfpi::SFPSETCC_MOD1_LREG_GTE0 : sfpi::SFPSETCC_MOD1_LREG_LT0);
+        TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG0, sfpi::SFPSWAP_MOD1_SWAP);
         TTI_SFPENCC(0, 0, 0, 0);
 
-        // Generate mask = -flag: 0x00000000 if a>=b, 0xFFFFFFFF if a<b
-        TTI_SFPLOADI(diff, sfpi::SFPLOADI_MOD0_USHORT, 0x00);  // diff = 0
-        TTI_SFPIADD(0, diff, flag, sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
-        // flag = 0 - flag = -flag = mask
-
-        TTI_SFPNOT(0, flag, sign_a, 0);  // sign_a = ~mask
-
-        // Select result using mask:
-        // IS_MAX_OP: result = (a & ~mask) | (b & mask)  [b when a<b, else a]
-        // IS_MIN_OP: result = (a & mask)  | (b & ~mask) [a when a<b, else b]
-        if constexpr (IS_MAX_OP) {
-            TTI_SFPAND(0, sign_a, a, 0);     // a = a & ~mask
-            TTI_SFPAND(0, flag, b_copy, 0);  // b_copy = b & mask
-        } else {
-            TTI_SFPAND(0, flag, a, 0);         // a = a & mask
-            TTI_SFPAND(0, sign_a, b_copy, 0);  // b_copy = b & ~mask
-        }
-        TTI_SFPOR(0, b_copy, a, 0);  // a = result
-
-        TT_SFPSTORE(a, InstrModLoadStore::INT32, ADDR_MOD_7, offset2);
-        sfpi::dst_reg++;
+        TT_SFPSTORE(IS_MAX_OP ? p_sfpu::LREG1 : p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_6, offset2);
     }
 #else
     // This uses SFPLOADMACRO to achieve a throughput of 5 cycles per input row.
@@ -210,7 +140,7 @@ inline void calculate_binary_max_min_int32(
     }
 
     TTI_SFPNOP;
-#endif  // DISABLE_SFPLOADMACRO
+#endif
 }
 
 template <bool IS_MAX_OP = true>

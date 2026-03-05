@@ -18,7 +18,7 @@ sfpi_inline void calculate_unary_max_min_float_body() {
 
     if constexpr (IS_MAX_OP) {
         // L0 = max(L0, constant); this will only write to L0 since L12 is a constant register.
-        TTI_SFPSWAP(0, p_sfpu::LREG12, p_sfpu::LREG0, 9); // mod1=9 means set VD=max and VC=min
+        TTI_SFPSWAP(0, p_sfpu::LREG12, p_sfpu::LREG0, 9);  // mod1=9 means set VD=max and VC=min
     } else {
         // L0 = min(L0, constant); this will only write to L0 since L12 is a constant register.
         TTI_SFPSWAP(0, p_sfpu::LREG12, p_sfpu::LREG0, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
@@ -28,16 +28,6 @@ sfpi_inline void calculate_unary_max_min_float_body() {
 
 template <bool IS_MAX_OP = true, bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_unary_max_min(uint value) {
-    load_value_param_float(value);
-
-#ifdef DISABLE_SFPLOADMACRO
-    // Non-LOADMACRO: sequential load-swap-store.
-#pragma GCC unroll 8
-    for (int d = 0; d < ITERATIONS; d++) {
-        calculate_unary_max_min_float_body<IS_MAX_OP>();
-        sfpi::dst_reg++;
-    }
-#else
     // This uses SFPLOADMACRO to achieve a throughput of 2 cycles per input row.
     //
     // Notation: [x] means scheduled by SFPLOADMACRO with VD=x.
@@ -48,6 +38,15 @@ inline void calculate_unary_max_min(uint value) {
     //  1 | nop  | swap_minmax([a], v) |     |       |       |
     //  0 | ...  |                     |     |       |       |
     //  1 | ...  |                     |     |       | [a]   |
+
+    load_value_param_float(value);
+#ifdef DISABLE_SFPLOADMACRO
+#pragma GCC unroll 8
+    for (int d = 0; d < ITERATIONS; d++) {
+        calculate_unary_max_min_float_body<IS_MAX_OP>();
+        sfpi::dst_reg++;
+    }
+#else
     constexpr int offset = 0;
 
 #pragma GCC unroll 8
@@ -63,21 +62,21 @@ inline void calculate_unary_max_min(uint value) {
 
 template <bool IS_UNSIGNED = false>
 sfpi_inline void load_value_param_int(uint value) {
-    // if msb(value) == 1, we need to invert for SFPSWAP to work (for both signed and unsigned)
-    sfpi::vConstIntPrgm0 = ((int)value < 0) ? ~value : value;
+    // if msb(value) == (IS_UNSIGNED ? 0 : 1), we need to invert for SFPSWAP to work
+    sfpi::vConstIntPrgm0 = IS_UNSIGNED ^ ((int)value >= 0) ? value : ~value;
 }
 
-template <bool IS_MAX_OP>
+template <bool IS_MAX_OP, bool IS_UNSIGNED = false>
 sfpi_inline void calculate_unary_max_min_int32_body(uint value) {
     TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
 
-    if ((int)value >= 0) {
+    if (IS_UNSIGNED ^ ((int)value >= 0)) {
         // if msb(value) == 0, we can safely use SFPSWAP even though it expects sign-magnitude integers
         TTI_SFPSWAP(
             0,
             p_sfpu::LREG12,
             p_sfpu::LREG0,
-            IS_MAX_OP ? 9 : sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);  // mod1=9 means set VD=max and VC=min
+            IS_MAX_OP ^ IS_UNSIGNED ? 9 : sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);  // mod1=9 means set VD=max and VC=min
     } else {
         // if msb(value) == 1, we need to invert both values for SFPSWAP to work
         TTI_SFPNOT(0, p_sfpu::LREG0, p_sfpu::LREG0, 0);
@@ -85,7 +84,7 @@ sfpi_inline void calculate_unary_max_min_int32_body(uint value) {
             0,
             p_sfpu::LREG12,
             p_sfpu::LREG0,
-            IS_MAX_OP ? sfpi::SFPSWAP_MOD1_VEC_MIN_MAX : 9);  // mod1=9 means set VD=max and VC=min
+            IS_MAX_OP ^ IS_UNSIGNED ? sfpi::SFPSWAP_MOD1_VEC_MIN_MAX : 9);  // mod1=9 means set VD=max and VC=min
         TTI_SFPNOT(0, p_sfpu::LREG0, p_sfpu::LREG0, 0);
     }
     TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
@@ -96,10 +95,9 @@ inline void calculate_unary_max_min_int32(uint value) {
     load_value_param_int<IS_UNSIGNED>(value);
 
 #ifdef DISABLE_SFPLOADMACRO
-    // Non-LOADMACRO: sequential load-op-store.
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        calculate_unary_max_min_int32_body<IS_MAX_OP>(value);
+        calculate_unary_max_min_int32_body<IS_MAX_OP, IS_UNSIGNED>(value);
         sfpi::dst_reg++;
     }
 #else
