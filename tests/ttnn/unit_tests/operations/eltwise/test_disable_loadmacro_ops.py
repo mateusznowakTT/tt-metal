@@ -26,17 +26,17 @@ _N = 32 * 32
 
 @pytest.fixture
 def use_sfploadmacro_ops(disable_sfploadmacro):
-    current_disable_sfploadmacro = os.environ.get("DISABLE_SFPLOADMACRO")
+    current_disable_sfploadmacro = os.environ.get("TT_METAL_DISABLE_SFPLOADMACRO")
     if disable_sfploadmacro:
-        os.environ["DISABLE_SFPLOADMACRO"] = "1"
+        os.environ["TT_METAL_DISABLE_SFPLOADMACRO"] = "1"
     elif current_disable_sfploadmacro is not None:
-        del os.environ["DISABLE_SFPLOADMACRO"]
+        del os.environ["TT_METAL_DISABLE_SFPLOADMACRO"]
     yield
     # Restore original state after test
     if current_disable_sfploadmacro is not None:
-        os.environ["DISABLE_SFPLOADMACRO"] = current_disable_sfploadmacro
-    elif os.environ.get("DISABLE_SFPLOADMACRO") is not None:
-        del os.environ["DISABLE_SFPLOADMACRO"]
+        os.environ["TT_METAL_DISABLE_SFPLOADMACRO"] = current_disable_sfploadmacro
+    elif os.environ.get("TT_METAL_DISABLE_SFPLOADMACRO") is not None:
+        del os.environ["TT_METAL_DISABLE_SFPLOADMACRO"]
 
 
 def _to_ttnn(t, dtype, device):
@@ -81,10 +81,8 @@ def _to_ttnn(t, dtype, device):
         (ttnn.int32, ttnn.uint16, torch.int32, lambda x: x.clamp(0, 65535)),
     ],
 )
-@pytest.mark.parametrize(
-    "disable_sfploadmacro", [True, False], ids=["DISABLE_SFPLOADMACRO=1", "DISABLE_SFPLOADMACRO=0"]
-)
-def test_typecast(device, src_tt_dtype, dst_tt_dtype, torch_src_dtype, ref_fn, use_sfploadmacro_ops):
+@pytest.mark.parametrize("disable_sfploadmacro", [True, False], ids=["SFPLOADMACRO_disabled", "SFPLOADMACRO_enabled"])
+def test_typecast(use_sfploadmacro_ops, device, src_tt_dtype, dst_tt_dtype, torch_src_dtype, ref_fn):
     torch.manual_seed(0)
     # Small non-negative integers — safe for every dtype combination
     raw = torch.arange(_N, dtype=torch.int32).reshape(_SHAPE_4D) % 100 + 1
@@ -111,10 +109,8 @@ def test_typecast(device, src_tt_dtype, dst_tt_dtype, torch_src_dtype, ref_fn, u
         (ttnn.float32, torch.float32),
     ],
 )
-@pytest.mark.parametrize(
-    "disable_sfploadmacro", [True, False], ids=["DISABLE_SFPLOADMACRO=1", "DISABLE_SFPLOADMACRO=0"]
-)
-def test_exp(device, tt_dtype, torch_dtype, use_sfploadmacro_ops):
+@pytest.mark.parametrize("disable_sfploadmacro", [True, False], ids=["SFPLOADMACRO_disabled", "SFPLOADMACRO_enabled"])
+def test_exp(use_sfploadmacro_ops, device, tt_dtype, torch_dtype):
     torch.manual_seed(0)
     torch_input = (torch.rand(_SHAPE_4D, dtype=torch.float32) * 4 - 2).to(torch_dtype)
     expected = torch.exp(torch_input)
@@ -137,10 +133,8 @@ def test_exp(device, tt_dtype, torch_dtype, use_sfploadmacro_ops):
         (ttnn.float32, torch.float32),
     ],
 )
-@pytest.mark.parametrize(
-    "disable_sfploadmacro", [True, False], ids=["DISABLE_SFPLOADMACRO=1", "DISABLE_SFPLOADMACRO=0"]
-)
-def test_reduce_max(device, dim, tt_dtype, torch_dtype, use_sfploadmacro_ops):
+@pytest.mark.parametrize("disable_sfploadmacro", [True, False], ids=["SFPLOADMACRO_disabled", "SFPLOADMACRO_enabled"])
+def test_reduce_max(use_sfploadmacro_ops, device, dim, tt_dtype, torch_dtype):
     torch.manual_seed(0)
     torch_input = torch_random(_SHAPE_3D, -100, 100, dtype=torch.bfloat16).to(torch_dtype)
     expected, _ = torch.max(torch_input, dim=dim)
@@ -160,10 +154,8 @@ def test_reduce_max(device, dim, tt_dtype, torch_dtype, use_sfploadmacro_ops):
         (ttnn.float32, torch.float32),
     ],
 )
-@pytest.mark.parametrize(
-    "disable_sfploadmacro", [True, False], ids=["DISABLE_SFPLOADMACRO=1", "DISABLE_SFPLOADMACRO=0"]
-)
-def test_reduce_min(device, dim, tt_dtype, torch_dtype, use_sfploadmacro_ops):
+@pytest.mark.parametrize("disable_sfploadmacro", [True, False], ids=["SFPLOADMACRO_disabled", "SFPLOADMACRO_enabled"])
+def test_reduce_min(use_sfploadmacro_ops, device, dim, tt_dtype, torch_dtype):
     torch.manual_seed(0)
     torch_input = torch_random(_SHAPE_3D, -100, 100, dtype=torch.bfloat16).to(torch_dtype)
     expected, _ = torch.min(torch_input, dim=dim)
@@ -180,7 +172,8 @@ def test_reduce_min(device, dim, tt_dtype, torch_dtype, use_sfploadmacro_ops):
 # ──────────────────────────────────────────────────────────────────────────────
 
 
-def test_mul_int(device):
+@pytest.mark.parametrize("disable_sfploadmacro", [True, False], ids=["SFPLOADMACRO_disabled", "SFPLOADMACRO_enabled"])
+def test_mul_int(use_sfploadmacro_ops, device):
     # Uses ttnn.uint16 to exercise ckernel_sfpu_mul_int.h (tt_llk path).
     # int32 mul routes to ckernel_sfpu_mul_int32.h (tt_metal path, separate work).
     torch.manual_seed(0)
@@ -206,10 +199,8 @@ def test_mul_int(device):
         (ttnn.float32, torch.float32),
     ],
 )
-@pytest.mark.parametrize(
-    "disable_sfploadmacro", [True, False], ids=["DISABLE_SFPLOADMACRO=1", "DISABLE_SFPLOADMACRO=0"]
-)
-def test_reciprocal(device, tt_dtype, torch_dtype, use_sfploadmacro_ops):
+@pytest.mark.parametrize("disable_sfploadmacro", [True, False], ids=["SFPLOADMACRO_disabled", "SFPLOADMACRO_enabled"])
+def test_reciprocal(use_sfploadmacro_ops, device, tt_dtype, torch_dtype):
     torch.manual_seed(0)
     # Avoid values near zero to prevent inf/large error
     torch_input = (torch.rand(_SHAPE_4D, dtype=torch.float32) + 0.5).to(torch_dtype)
@@ -225,10 +216,8 @@ def test_reciprocal(device, tt_dtype, torch_dtype, use_sfploadmacro_ops):
 # ──────────────────────────────────────────────────────────────────────────────
 
 
-@pytest.mark.parametrize(
-    "disable_sfploadmacro", [True, False], ids=["DISABLE_SFPLOADMACRO=1", "DISABLE_SFPLOADMACRO=0"]
-)
-def test_transpose(device, use_sfploadmacro_ops):
+@pytest.mark.parametrize("disable_sfploadmacro", [True, False], ids=["SFPLOADMACRO_disabled", "SFPLOADMACRO_enabled"])
+def test_transpose(use_sfploadmacro_ops, device):
     torch.manual_seed(0)
     torch_input = torch.rand(_SHAPE_4D, dtype=torch.bfloat16)
     expected = torch_input.transpose(2, 3)
@@ -245,10 +234,8 @@ def test_transpose(device, use_sfploadmacro_ops):
 
 @pytest.mark.parametrize("tt_dtype, torch_dtype", [(ttnn.bfloat16, torch.bfloat16), (ttnn.float32, torch.float32)])
 @pytest.mark.parametrize("scalar", [-5.0, 0.0, 3.14])
-@pytest.mark.parametrize(
-    "disable_sfploadmacro", [True, False], ids=["DISABLE_SFPLOADMACRO=1", "DISABLE_SFPLOADMACRO=0"]
-)
-def test_unary_max_float(device, tt_dtype, torch_dtype, scalar, use_sfploadmacro_ops):
+@pytest.mark.parametrize("disable_sfploadmacro", [True, False], ids=["SFPLOADMACRO_disabled", "SFPLOADMACRO_enabled"])
+def test_unary_max_float(use_sfploadmacro_ops, device, tt_dtype, torch_dtype, scalar):
     torch.manual_seed(0)
     torch_input = (torch.rand(_SHAPE_4D, dtype=torch.float32) * 20 - 10).to(torch_dtype)
     expected = torch.maximum(torch_input, torch.full(_SHAPE_4D, scalar, dtype=torch_dtype))
@@ -260,10 +247,8 @@ def test_unary_max_float(device, tt_dtype, torch_dtype, scalar, use_sfploadmacro
 
 @pytest.mark.parametrize("tt_dtype, torch_dtype", [(ttnn.bfloat16, torch.bfloat16), (ttnn.float32, torch.float32)])
 @pytest.mark.parametrize("scalar", [-5.0, 0.0, 3.14])
-@pytest.mark.parametrize(
-    "disable_sfploadmacro", [True, False], ids=["DISABLE_SFPLOADMACRO=1", "DISABLE_SFPLOADMACRO=0"]
-)
-def test_unary_min_float(device, tt_dtype, torch_dtype, scalar, use_sfploadmacro_ops):
+@pytest.mark.parametrize("disable_sfploadmacro", [True, False], ids=["SFPLOADMACRO_disabled", "SFPLOADMACRO_enabled"])
+def test_unary_min_float(use_sfploadmacro_ops, device, tt_dtype, torch_dtype, scalar):
     torch.manual_seed(0)
     torch_input = (torch.rand(_SHAPE_4D, dtype=torch.float32) * 20 - 10).to(torch_dtype)
     expected = torch.minimum(torch_input, torch.full(_SHAPE_4D, scalar, dtype=torch_dtype))
@@ -280,10 +265,8 @@ def test_unary_min_float(device, tt_dtype, torch_dtype, scalar, use_sfploadmacro
 
 @pytest.mark.parametrize("tt_dtype, signed", [(ttnn.int32, True), (ttnn.uint32, False)])
 @pytest.mark.parametrize("scalar", [-100, 0, 50, 2147483647, -2147483648])
-@pytest.mark.parametrize(
-    "disable_sfploadmacro", [True, False], ids=["DISABLE_SFPLOADMACRO=1", "DISABLE_SFPLOADMACRO=0"]
-)
-def test_unary_max_int32(device, tt_dtype, signed, scalar, use_sfploadmacro_ops):
+@pytest.mark.parametrize("disable_sfploadmacro", [True, False], ids=["SFPLOADMACRO_disabled", "SFPLOADMACRO_enabled"])
+def test_unary_max_int32(use_sfploadmacro_ops, device, tt_dtype, signed, scalar):
     torch.manual_seed(0)
     n = _N
     torch_input = torch.linspace(-1000, 1000, n, dtype=torch.int32).reshape(_SHAPE_4D)
@@ -301,10 +284,8 @@ def test_unary_max_int32(device, tt_dtype, signed, scalar, use_sfploadmacro_ops)
 
 @pytest.mark.parametrize("tt_dtype, signed", [(ttnn.int32, True), (ttnn.uint32, False)])
 @pytest.mark.parametrize("scalar", [-100, 0, 50, 2147483647, -2147483648])
-@pytest.mark.parametrize(
-    "disable_sfploadmacro", [True, False], ids=["DISABLE_SFPLOADMACRO=1", "DISABLE_SFPLOADMACRO=0"]
-)
-def test_unary_min_int32(device, tt_dtype, signed, scalar, use_sfploadmacro_ops):
+@pytest.mark.parametrize("disable_sfploadmacro", [True, False], ids=["SFPLOADMACRO_disabled", "SFPLOADMACRO_enabled"])
+def test_unary_min_int32(use_sfploadmacro_ops, device, tt_dtype, signed, scalar):
     torch.manual_seed(0)
     n = _N
     torch_input = torch.linspace(-1000, 1000, n, dtype=torch.int32).reshape(_SHAPE_4D)
@@ -326,10 +307,8 @@ def test_unary_min_int32(device, tt_dtype, signed, scalar, use_sfploadmacro_ops)
 
 
 @pytest.mark.parametrize("tt_dtype, torch_dtype", [(ttnn.bfloat16, torch.bfloat16), (ttnn.float32, torch.float32)])
-@pytest.mark.parametrize(
-    "disable_sfploadmacro", [True, False], ids=["DISABLE_SFPLOADMACRO=1", "DISABLE_SFPLOADMACRO=0"]
-)
-def test_binary_max_float(device, tt_dtype, torch_dtype, use_sfploadmacro_ops):
+@pytest.mark.parametrize("disable_sfploadmacro", [True, False], ids=["SFPLOADMACRO_disabled", "SFPLOADMACRO_enabled"])
+def test_binary_max_float(use_sfploadmacro_ops, device, tt_dtype, torch_dtype):
     torch.manual_seed(0)
     a = (torch.rand(_SHAPE_4D, dtype=torch.float32) * 20 - 10).to(torch_dtype)
     b = (torch.rand(_SHAPE_4D, dtype=torch.float32) * 20 - 10).to(torch_dtype)
@@ -341,10 +320,8 @@ def test_binary_max_float(device, tt_dtype, torch_dtype, use_sfploadmacro_ops):
 
 
 @pytest.mark.parametrize("tt_dtype, torch_dtype", [(ttnn.bfloat16, torch.bfloat16), (ttnn.float32, torch.float32)])
-@pytest.mark.parametrize(
-    "disable_sfploadmacro", [True, False], ids=["DISABLE_SFPLOADMACRO=1", "DISABLE_SFPLOADMACRO=0"]
-)
-def test_binary_min_float(device, tt_dtype, torch_dtype, use_sfploadmacro_ops):
+@pytest.mark.parametrize("disable_sfploadmacro", [True, False], ids=["SFPLOADMACRO_disabled", "SFPLOADMACRO_enabled"])
+def test_binary_min_float(use_sfploadmacro_ops, device, tt_dtype, torch_dtype):
     torch.manual_seed(0)
     a = (torch.rand(_SHAPE_4D, dtype=torch.float32) * 20 - 10).to(torch_dtype)
     b = (torch.rand(_SHAPE_4D, dtype=torch.float32) * 20 - 10).to(torch_dtype)
@@ -371,10 +348,8 @@ def test_binary_min_float(device, tt_dtype, torch_dtype, use_sfploadmacro_ops):
         (ttnn.uint32, 0, 2000, 0, 2000),  # unsigned
     ],
 )
-@pytest.mark.parametrize(
-    "disable_sfploadmacro", [True, False], ids=["DISABLE_SFPLOADMACRO=1", "DISABLE_SFPLOADMACRO=0"]
-)
-def test_binary_max_int32(device, tt_dtype, low_a, high_a, low_b, high_b, use_sfploadmacro_ops):
+@pytest.mark.parametrize("disable_sfploadmacro", [True, False], ids=["SFPLOADMACRO_disabled", "SFPLOADMACRO_enabled"])
+def test_binary_max_int32(use_sfploadmacro_ops, device, tt_dtype, low_a, high_a, low_b, high_b):
     n = _N
     a = torch.linspace(low_a, high_a, n, dtype=torch.int32).reshape(_SHAPE_4D)
     b = torch.linspace(high_b, low_b, n, dtype=torch.int32).reshape(_SHAPE_4D)
@@ -395,10 +370,8 @@ def test_binary_max_int32(device, tt_dtype, low_a, high_a, low_b, high_b, use_sf
         (ttnn.uint32, 0, 2000, 0, 2000),
     ],
 )
-@pytest.mark.parametrize(
-    "disable_sfploadmacro", [True, False], ids=["DISABLE_SFPLOADMACRO=1", "DISABLE_SFPLOADMACRO=0"]
-)
-def test_binary_min_int32(device, tt_dtype, low_a, high_a, low_b, high_b, use_sfploadmacro_ops):
+@pytest.mark.parametrize("disable_sfploadmacro", [True, False], ids=["SFPLOADMACRO_disabled", "SFPLOADMACRO_enabled"])
+def test_binary_min_int32(use_sfploadmacro_ops, device, tt_dtype, low_a, high_a, low_b, high_b):
     n = _N
     a = torch.linspace(low_a, high_a, n, dtype=torch.int32).reshape(_SHAPE_4D)
     b = torch.linspace(high_b, low_b, n, dtype=torch.int32).reshape(_SHAPE_4D)
@@ -414,10 +387,8 @@ def test_binary_min_int32(device, tt_dtype, low_a, high_a, low_b, high_b, use_sf
 # ──────────────────────────────────────────────────────────────────────────────
 
 
-@pytest.mark.parametrize(
-    "disable_sfploadmacro", [True, False], ids=["DISABLE_SFPLOADMACRO=1", "DISABLE_SFPLOADMACRO=0"]
-)
-def test_mul_int32(device, use_sfploadmacro_ops):
+@pytest.mark.parametrize("disable_sfploadmacro", [True, False], ids=["SFPLOADMACRO_disabled", "SFPLOADMACRO_enabled"])
+def test_mul_int32(use_sfploadmacro_ops, device):
     torch.manual_seed(0)
     # Values small enough that the lower 32 bits of the product are deterministic
     a = torch.linspace(-100, 100, _N, dtype=torch.int32).reshape(_SHAPE_4D)
