@@ -178,3 +178,73 @@ def test_full_like(device, memory_strategy, layout):
     tt_result = ttnn.to_torch(tt_output)
     expected = torch.full(shape, 3.14, dtype=torch.bfloat16)
     assert_with_pcc(expected, tt_result, 0.999)
+
+
+# =============================================================================
+# Mixed-config multi-input tests for Indexed Fill
+# =============================================================================
+
+MIXED_CONFIGS = [
+    ("dram", "l1"),
+    ("l1", "dram"),
+    ("dram", "height_sharded"),
+    ("height_sharded", "dram"),
+    ("l1", "height_sharded"),
+    ("dram", "width_sharded"),
+    ("dram", "block_sharded"),
+    ("height_sharded", "width_sharded"),
+]
+
+
+@pytest.mark.parametrize("input_mem,fill_mem", MIXED_CONFIGS)
+def test_indexed_fill_mixed_memory(device, input_mem, fill_mem):
+    """Test indexed_fill with input and fill tensors in different memory configs."""
+    shape = [1, 1, 32, 64]
+    torch_input = torch.randn(shape, dtype=torch.bfloat16)
+    torch_indices = torch.tensor([0], dtype=torch.int32).reshape(1, 1, 1, 1)
+    torch_fill = torch.ones([1, 1, 32, 64], dtype=torch.bfloat16) * 5.0
+
+    input_config = make_memory_config(input_mem, shape)
+    fill_config = make_memory_config(fill_mem, shape)
+
+    tt_input = ttnn.from_torch(
+        torch_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=input_config
+    )
+    tt_indices = ttnn.from_torch(torch_indices, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    tt_fill = ttnn.from_torch(
+        torch_fill, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=fill_config
+    )
+
+    tt_output = ttnn.indexed_fill(tt_indices, tt_input, tt_fill, dim=0)
+    tt_result = ttnn.to_torch(tt_output)
+    assert tt_result.numel() > 0
+
+
+@pytest.mark.parametrize(
+    "input_layout,fill_layout",
+    [
+        (ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT),
+        (ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT),
+    ],
+)
+@pytest.mark.parametrize("memory_strategy", ALL_MEMORY_STRATEGIES)
+def test_indexed_fill_mixed_layouts(device, input_layout, fill_layout, memory_strategy):
+    """Test indexed_fill with input and fill in different layouts."""
+    shape = [1, 1, 32, 64]
+    torch_input = torch.randn(shape, dtype=torch.bfloat16)
+    torch_indices = torch.tensor([0], dtype=torch.int32).reshape(1, 1, 1, 1)
+    torch_fill = torch.ones([1, 1, 32, 64], dtype=torch.bfloat16) * 5.0
+
+    mem_config = make_memory_config(memory_strategy, shape)
+
+    tt_input = ttnn.from_torch(
+        torch_input, dtype=ttnn.bfloat16, layout=input_layout, device=device, memory_config=mem_config
+    )
+    tt_indices = ttnn.from_torch(torch_indices, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    tt_fill = ttnn.from_torch(
+        torch_fill, dtype=ttnn.bfloat16, layout=fill_layout, device=device, memory_config=mem_config
+    )
+
+    tt_output = ttnn.indexed_fill(tt_indices, tt_input, tt_fill, dim=0)
+    tt_result = ttnn.to_torch(tt_output)
+    assert tt_result.numel() > 0

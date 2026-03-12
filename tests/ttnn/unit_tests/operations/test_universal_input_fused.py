@@ -349,3 +349,175 @@ def test_batchnorm_rm(device, memory_strategy):
 
     tt_result = ttnn.to_torch(tt_output)
     assert_with_pcc(torch_output, tt_result, 0.98)
+
+
+# =============================================================================
+# Mixed-config multi-input tests
+# =============================================================================
+
+MIXED_CONFIGS = [
+    ("dram", "l1"),
+    ("l1", "dram"),
+    ("dram", "height_sharded"),
+    ("height_sharded", "dram"),
+    ("l1", "height_sharded"),
+    ("height_sharded", "l1"),
+    ("dram", "width_sharded"),
+    ("width_sharded", "dram"),
+    ("dram", "block_sharded"),
+    ("block_sharded", "dram"),
+    ("height_sharded", "width_sharded"),
+    ("width_sharded", "block_sharded"),
+]
+
+
+@pytest.mark.parametrize("input_mem,weight_mem", MIXED_CONFIGS)
+def test_layernorm_mixed_input_weight(device, input_mem, weight_mem):
+    """Test layernorm with input and weight/bias in different memory configs."""
+    shape = [1, 1, 128, 128]
+    torch_input = torch.randn(shape, dtype=torch.bfloat16)
+    torch_weight = torch.randn([shape[-1]], dtype=torch.bfloat16)
+    torch_bias = torch.randn([shape[-1]], dtype=torch.bfloat16)
+
+    input_config = make_memory_config(input_mem, shape)
+    weight_shape = [1, 1, 1, shape[-1]]
+    weight_config = make_memory_config(weight_mem, weight_shape)
+
+    tt_input = ttnn.from_torch(
+        torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=input_config
+    )
+    tt_weight = ttnn.from_torch(
+        torch_weight.reshape(weight_shape),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=weight_config,
+    )
+    tt_bias = ttnn.from_torch(
+        torch_bias.reshape(weight_shape),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=weight_config,
+    )
+
+    tt_output = ttnn.layer_norm(tt_input, weight=tt_weight, bias=tt_bias)
+    torch_output = torch.nn.functional.layer_norm(
+        torch_input.float(), [shape[-1]], torch_weight.float(), torch_bias.float()
+    ).bfloat16()
+
+    tt_result = ttnn.to_torch(tt_output)
+    assert_with_pcc(torch_output, tt_result, 0.99)
+
+
+@pytest.mark.parametrize("input_mem,weight_mem", MIXED_CONFIGS)
+def test_rmsnorm_mixed_input_weight(device, input_mem, weight_mem):
+    """Test rmsnorm with input and weight in different memory configs."""
+    shape = [1, 1, 128, 128]
+    torch_input = torch.randn(shape, dtype=torch.bfloat16)
+    torch_weight = torch.randn([shape[-1]], dtype=torch.bfloat16)
+
+    input_config = make_memory_config(input_mem, shape)
+    weight_shape = [1, 1, 1, shape[-1]]
+    weight_config = make_memory_config(weight_mem, weight_shape)
+
+    tt_input = ttnn.from_torch(
+        torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=input_config
+    )
+    tt_weight = ttnn.from_torch(
+        torch_weight.reshape(weight_shape),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=weight_config,
+    )
+
+    tt_output = ttnn.rms_norm(tt_input, weight=tt_weight)
+
+    variance = torch_input.float().pow(2).mean(-1, keepdim=True)
+    torch_output = (
+        torch_input.float() * torch.rsqrt(variance + 1e-6) * torch_weight.float().reshape(1, 1, 1, -1)
+    ).bfloat16()
+
+    tt_result = ttnn.to_torch(tt_output)
+    assert_with_pcc(torch_output, tt_result, 0.98)
+
+
+@pytest.mark.parametrize("input_mem,residual_mem", MIXED_CONFIGS)
+def test_layernorm_mixed_input_residual(device, input_mem, residual_mem):
+    """Test layernorm with input and residual in different memory configs."""
+    shape = [1, 1, 128, 128]
+    torch_input = torch.randn(shape, dtype=torch.bfloat16)
+    torch_residual = torch.randn(shape, dtype=torch.bfloat16)
+
+    input_config = make_memory_config(input_mem, shape)
+    residual_config = make_memory_config(residual_mem, shape)
+
+    tt_input = ttnn.from_torch(
+        torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=input_config
+    )
+    tt_residual = ttnn.from_torch(
+        torch_residual, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=residual_config
+    )
+
+    tt_output = ttnn.layer_norm(tt_input, residual_input_tensor=tt_residual)
+    torch_combined = torch_input.float() + torch_residual.float()
+    torch_output = torch.nn.functional.layer_norm(torch_combined, [shape[-1]]).bfloat16()
+
+    tt_result = ttnn.to_torch(tt_output)
+    assert_with_pcc(torch_output, tt_result, 0.98)
+
+
+@pytest.mark.parametrize("input_mem,mask_mem", MIXED_CONFIGS)
+def test_softmax_mixed_input_mask(device, input_mem, mask_mem):
+    """Test softmax with input and mask in different memory configs."""
+    shape = [1, 1, 128, 128]
+    torch_input = torch.randn(shape, dtype=torch.bfloat16)
+    # Mask: 0 = keep, large negative = mask out
+    torch_mask = torch.zeros(shape, dtype=torch.bfloat16)
+    torch_mask[:, :, :, 64:] = -1e4
+
+    input_config = make_memory_config(input_mem, shape)
+    mask_config = make_memory_config(mask_mem, shape)
+
+    tt_input = ttnn.from_torch(
+        torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=input_config
+    )
+    tt_mask = ttnn.from_torch(
+        torch_mask, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mask_config
+    )
+
+    tt_output = ttnn.softmax(tt_input, mask=tt_mask, dim=-1)
+    torch_output = torch.softmax((torch_input.float() + torch_mask.float()), dim=-1).bfloat16()
+
+    tt_result = ttnn.to_torch(tt_output)
+    assert_with_pcc(torch_output, tt_result, 0.98)
+
+
+@pytest.mark.parametrize(
+    "input_layout,weight_layout",
+    [
+        (ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT),
+        (ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT),
+    ],
+)
+@pytest.mark.parametrize("memory_strategy", ALL_MEMORY_STRATEGIES)
+def test_layernorm_mixed_layouts(device, input_layout, weight_layout, memory_strategy):
+    """Test layernorm with input and weight in different layouts."""
+    shape = [1, 1, 128, 128]
+    torch_input = torch.randn(shape, dtype=torch.bfloat16)
+    torch_weight = torch.randn([shape[-1]], dtype=torch.bfloat16)
+
+    mem_config = make_memory_config(memory_strategy, shape)
+    tt_input = ttnn.from_torch(
+        torch_input, dtype=ttnn.bfloat16, layout=input_layout, device=device, memory_config=mem_config
+    )
+    tt_weight = ttnn.from_torch(
+        torch_weight.reshape(1, 1, 1, -1), dtype=ttnn.bfloat16, layout=weight_layout, device=device
+    )
+
+    tt_output = ttnn.layer_norm(tt_input, weight=tt_weight)
+    torch_output = torch.nn.functional.layer_norm(torch_input.float(), [shape[-1]], torch_weight.float()).bfloat16()
+
+    tt_result = ttnn.to_torch(tt_output)
+    assert_with_pcc(torch_output, tt_result, 0.99)

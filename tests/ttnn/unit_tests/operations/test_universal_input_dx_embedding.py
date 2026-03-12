@@ -136,3 +136,95 @@ def test_embedding_index_memory(device, index_memory_strategy):
         torch_output = torch_output.reshape(tt_result.shape)
 
     assert_with_pcc(torch_output, tt_result, 0.999)
+
+
+# =============================================================================
+# Embedding - mixed configs: index and weight in different memory/layouts
+# =============================================================================
+
+MIXED_CONFIGS = [
+    ("dram", "l1"),
+    ("l1", "dram"),
+    ("dram", "height_sharded"),
+    ("height_sharded", "dram"),
+    ("l1", "height_sharded"),
+    ("dram", "width_sharded"),
+    ("dram", "block_sharded"),
+    ("height_sharded", "width_sharded"),
+]
+
+
+@pytest.mark.parametrize("index_mem,weight_mem", MIXED_CONFIGS)
+def test_embedding_mixed_index_weight_memory(device, index_mem, weight_mem):
+    """Test embedding with index and weight tensors in different memory configs."""
+    vocab_size = 256
+    embedding_dim = 128
+    seq_len = 32
+
+    torch_indices = torch.randint(0, vocab_size, (1, seq_len), dtype=torch.int32)
+    torch_weights = torch.randn(vocab_size, embedding_dim, dtype=torch.bfloat16)
+
+    index_shape = [1, 1, 1, seq_len]
+    torch_indices_4d = torch_indices.reshape(index_shape)
+    index_config = make_memory_config(index_mem, index_shape)
+    tt_indices = ttnn.from_torch(
+        torch_indices_4d, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=index_config
+    )
+
+    weight_shape = [1, 1, vocab_size, embedding_dim]
+    torch_weights_4d = torch_weights.reshape(weight_shape)
+    weight_config = make_memory_config(weight_mem, weight_shape)
+    tt_weights = ttnn.from_torch(
+        torch_weights_4d, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=weight_config
+    )
+
+    tt_output = ttnn.embedding(tt_indices, tt_weights)
+
+    torch_output = torch.nn.functional.embedding(torch_indices.long(), torch_weights)
+    tt_result = ttnn.to_torch(tt_output)
+    if tt_result.shape != torch_output.shape:
+        torch_output = torch_output.reshape(tt_result.shape)
+
+    assert_with_pcc(torch_output, tt_result, 0.999)
+
+
+@pytest.mark.parametrize(
+    "index_layout,weight_layout",
+    [
+        (ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT),
+        (ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT),
+        (ttnn.TILE_LAYOUT, ttnn.TILE_LAYOUT),
+    ],
+)
+@pytest.mark.parametrize("memory_strategy", ALL_MEMORY_STRATEGIES)
+def test_embedding_mixed_layouts(device, index_layout, weight_layout, memory_strategy):
+    """Test embedding with index and weight in different layouts."""
+    vocab_size = 256
+    embedding_dim = 128
+    seq_len = 32
+
+    torch_indices = torch.randint(0, vocab_size, (1, seq_len), dtype=torch.int32)
+    torch_weights = torch.randn(vocab_size, embedding_dim, dtype=torch.bfloat16)
+
+    weight_shape = [1, 1, vocab_size, embedding_dim]
+    mem_config = make_memory_config(memory_strategy, weight_shape)
+
+    tt_indices = ttnn.from_torch(
+        torch_indices.reshape(1, 1, 1, seq_len), dtype=ttnn.uint32, layout=index_layout, device=device
+    )
+    tt_weights = ttnn.from_torch(
+        torch_weights.reshape(weight_shape),
+        dtype=ttnn.bfloat16,
+        layout=weight_layout,
+        device=device,
+        memory_config=mem_config,
+    )
+
+    tt_output = ttnn.embedding(tt_indices, tt_weights)
+
+    torch_output = torch.nn.functional.embedding(torch_indices.long(), torch_weights)
+    tt_result = ttnn.to_torch(tt_output)
+    if tt_result.shape != torch_output.shape:
+        torch_output = torch_output.reshape(tt_result.shape)
+
+    assert_with_pcc(torch_output, tt_result, 0.999)

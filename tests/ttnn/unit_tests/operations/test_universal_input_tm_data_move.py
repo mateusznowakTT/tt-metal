@@ -246,3 +246,133 @@ def test_fold(device, memory_strategy, layout):
     tt_result = ttnn.to_torch(tt_output)
     # Just check it runs without error and produces output
     assert tt_result.numel() > 0
+
+
+# =============================================================================
+# Mixed-config multi-input tests for Bcast (binary ops with different configs)
+# =============================================================================
+
+MIXED_CONFIGS = [
+    ("dram", "l1"),
+    ("l1", "dram"),
+    ("dram", "height_sharded"),
+    ("height_sharded", "dram"),
+    ("l1", "height_sharded"),
+    ("dram", "width_sharded"),
+    ("width_sharded", "dram"),
+    ("dram", "block_sharded"),
+    ("height_sharded", "width_sharded"),
+    ("width_sharded", "block_sharded"),
+]
+
+
+@pytest.mark.parametrize("mem_a,mem_b", MIXED_CONFIGS)
+def test_bcast_add_mixed_memory_tile(device, mem_a, mem_b):
+    """Test broadcast add with two inputs in different memory configs (TILE)."""
+    shape_a = [1, 1, 128, 128]
+    shape_b = [1, 1, 1, 128]
+    torch_a = torch.randn(shape_a, dtype=torch.bfloat16)
+    torch_b = torch.randn(shape_b, dtype=torch.bfloat16)
+
+    config_a = make_memory_config(mem_a, shape_a)
+    config_b = make_memory_config(mem_b, shape_b)
+
+    tt_a = ttnn.from_torch(torch_a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=config_a)
+    tt_b = ttnn.from_torch(torch_b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=config_b)
+
+    tt_output = ttnn.add(tt_a, tt_b)
+    torch_output = torch_a + torch_b
+
+    tt_result = ttnn.to_torch(tt_output)
+    assert_with_pcc(torch_output, tt_result, 0.999)
+
+
+@pytest.mark.parametrize("mem_a,mem_b", MIXED_CONFIGS)
+def test_bcast_mul_mixed_memory_tile(device, mem_a, mem_b):
+    """Test broadcast multiply with two inputs in different memory configs (TILE)."""
+    shape_a = [1, 1, 128, 128]
+    shape_b = [1, 1, 128, 1]
+    torch_a = torch.randn(shape_a, dtype=torch.bfloat16)
+    torch_b = torch.randn(shape_b, dtype=torch.bfloat16)
+
+    config_a = make_memory_config(mem_a, shape_a)
+    config_b = make_memory_config(mem_b, shape_b)
+
+    tt_a = ttnn.from_torch(torch_a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=config_a)
+    tt_b = ttnn.from_torch(torch_b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=config_b)
+
+    tt_output = ttnn.mul(tt_a, tt_b)
+    torch_output = torch_a * torch_b
+
+    tt_result = ttnn.to_torch(tt_output)
+    assert_with_pcc(torch_output, tt_result, 0.999)
+
+
+@pytest.mark.parametrize("mem_a,mem_b", MIXED_CONFIGS)
+def test_binary_add_same_shape_mixed_memory(device, mem_a, mem_b):
+    """Test element-wise add with same-shape inputs in different memory configs."""
+    shape = [1, 1, 128, 128]
+    torch_a = torch.randn(shape, dtype=torch.bfloat16)
+    torch_b = torch.randn(shape, dtype=torch.bfloat16)
+
+    config_a = make_memory_config(mem_a, shape)
+    config_b = make_memory_config(mem_b, shape)
+
+    tt_a = ttnn.from_torch(torch_a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=config_a)
+    tt_b = ttnn.from_torch(torch_b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=config_b)
+
+    tt_output = ttnn.add(tt_a, tt_b)
+    torch_output = torch_a + torch_b
+
+    tt_result = ttnn.to_torch(tt_output)
+    assert_with_pcc(torch_output, tt_result, 0.999)
+
+
+@pytest.mark.parametrize(
+    "layout_a,layout_b",
+    [
+        (ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT),
+        (ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT),
+    ],
+)
+@pytest.mark.parametrize("memory_strategy", ALL_MEMORY_STRATEGIES)
+def test_binary_add_mixed_layouts(device, layout_a, layout_b, memory_strategy):
+    """Test element-wise add with inputs in different layouts."""
+    shape = [1, 1, 128, 128]
+    torch_a = torch.randn(shape, dtype=torch.bfloat16)
+    torch_b = torch.randn(shape, dtype=torch.bfloat16)
+
+    mem_config = make_memory_config(memory_strategy, shape)
+
+    tt_a = ttnn.from_torch(torch_a, dtype=ttnn.bfloat16, layout=layout_a, device=device, memory_config=mem_config)
+    tt_b = ttnn.from_torch(torch_b, dtype=ttnn.bfloat16, layout=layout_b, device=device, memory_config=mem_config)
+
+    tt_output = ttnn.add(tt_a, tt_b)
+    torch_output = torch_a + torch_b
+
+    tt_result = ttnn.to_torch(tt_output)
+    assert_with_pcc(torch_output, tt_result, 0.999)
+
+
+@pytest.mark.parametrize("mem_a,mem_b", MIXED_CONFIGS)
+def test_binary_sub_mixed_memory_rm(device, mem_a, mem_b):
+    """Test element-wise subtract with RM inputs in different memory configs."""
+    shape = [1, 1, 128, 128]
+    torch_a = torch.randn(shape, dtype=torch.bfloat16)
+    torch_b = torch.randn(shape, dtype=torch.bfloat16)
+
+    config_a = make_memory_config(mem_a, shape)
+    config_b = make_memory_config(mem_b, shape)
+
+    tt_a = ttnn.from_torch(
+        torch_a, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=config_a
+    )
+    tt_b = ttnn.from_torch(
+        torch_b, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=config_b
+    )
+
+    tt_output = ttnn.sub(tt_a, tt_b)
+    torch_output = torch_a - torch_b
+
+    tt_result = ttnn.to_torch(tt_output)
+    assert_with_pcc(torch_output, tt_result, 0.999)

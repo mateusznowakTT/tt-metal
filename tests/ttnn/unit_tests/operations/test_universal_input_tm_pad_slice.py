@@ -231,3 +231,111 @@ def test_split_height_dim(device, memory_strategy, layout):
         if tt_result.shape != torch_out.shape:
             torch_out = torch_out.reshape(tt_result.shape)
         assert_with_pcc(torch_out, tt_result, 0.9999)
+
+
+# =============================================================================
+# Mixed-config multi-input tests for Concat
+# =============================================================================
+
+MIXED_CONFIGS = [
+    ("dram", "l1"),
+    ("l1", "dram"),
+    ("dram", "height_sharded"),
+    ("height_sharded", "dram"),
+    ("l1", "height_sharded"),
+    ("dram", "width_sharded"),
+    ("width_sharded", "dram"),
+    ("dram", "block_sharded"),
+    ("height_sharded", "width_sharded"),
+    ("width_sharded", "block_sharded"),
+]
+
+
+@pytest.mark.parametrize("mem_a,mem_b", MIXED_CONFIGS)
+@pytest.mark.parametrize("layout", BOTH_LAYOUTS)
+def test_concat_mixed_memory_configs(device, mem_a, mem_b, layout):
+    """Test concat with inputs in different memory configs."""
+    shape = [1, 1, 64, 64]
+    torch_a = torch.randn(shape, dtype=torch.bfloat16)
+    torch_b = torch.randn(shape, dtype=torch.bfloat16)
+
+    config_a = make_memory_config(mem_a, shape)
+    config_b = make_memory_config(mem_b, shape)
+
+    tt_a = ttnn.from_torch(torch_a, dtype=ttnn.bfloat16, layout=layout, device=device, memory_config=config_a)
+    tt_b = ttnn.from_torch(torch_b, dtype=ttnn.bfloat16, layout=layout, device=device, memory_config=config_b)
+
+    tt_output = ttnn.concat([tt_a, tt_b], dim=-1)
+    torch_output = torch.cat([torch_a, torch_b], dim=-1)
+
+    tt_result = ttnn.to_torch(tt_output)
+    assert_with_pcc(torch_output, tt_result, 0.9999)
+
+
+@pytest.mark.parametrize("mem_a,mem_b", MIXED_CONFIGS)
+def test_concat_mixed_memory_height_dim(device, mem_a, mem_b):
+    """Test concat along height dim with inputs in different memory configs."""
+    shape = [1, 1, 64, 64]
+    torch_a = torch.randn(shape, dtype=torch.bfloat16)
+    torch_b = torch.randn(shape, dtype=torch.bfloat16)
+
+    config_a = make_memory_config(mem_a, shape)
+    config_b = make_memory_config(mem_b, shape)
+
+    tt_a = ttnn.from_torch(torch_a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=config_a)
+    tt_b = ttnn.from_torch(torch_b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=config_b)
+
+    tt_output = ttnn.concat([tt_a, tt_b], dim=-2)
+    torch_output = torch.cat([torch_a, torch_b], dim=-2)
+
+    tt_result = ttnn.to_torch(tt_output)
+    assert_with_pcc(torch_output, tt_result, 0.9999)
+
+
+@pytest.mark.parametrize(
+    "layout_a,layout_b",
+    [
+        (ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT),
+        (ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT),
+    ],
+)
+@pytest.mark.parametrize("memory_strategy", ALL_MEMORY_STRATEGIES)
+def test_concat_mixed_layouts(device, layout_a, layout_b, memory_strategy):
+    """Test concat with inputs in different layouts."""
+    shape = [1, 1, 64, 64]
+    torch_a = torch.randn(shape, dtype=torch.bfloat16)
+    torch_b = torch.randn(shape, dtype=torch.bfloat16)
+
+    mem_config = make_memory_config(memory_strategy, shape)
+
+    tt_a = ttnn.from_torch(torch_a, dtype=ttnn.bfloat16, layout=layout_a, device=device, memory_config=mem_config)
+    tt_b = ttnn.from_torch(torch_b, dtype=ttnn.bfloat16, layout=layout_b, device=device, memory_config=mem_config)
+
+    tt_output = ttnn.concat([tt_a, tt_b], dim=-1)
+    torch_output = torch.cat([torch_a, torch_b], dim=-1)
+
+    tt_result = ttnn.to_torch(tt_output)
+    assert_with_pcc(torch_output, tt_result, 0.9999)
+
+
+@pytest.mark.parametrize("mem_a,mem_b", MIXED_CONFIGS)
+def test_concat_three_tensors_mixed(device, mem_a, mem_b):
+    """Test concat with 3 tensors where inputs differ in memory config."""
+    shape = [1, 1, 64, 64]
+    torch_tensors = [torch.randn(shape, dtype=torch.bfloat16) for _ in range(3)]
+
+    configs = [
+        make_memory_config(mem_a, shape),
+        make_memory_config(mem_b, shape),
+        make_memory_config(mem_a, shape),
+    ]
+    tt_tensors = [
+        ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=c)
+        for t, c in zip(torch_tensors, configs)
+    ]
+
+    tt_output = ttnn.concat(tt_tensors, dim=-1)
+    torch_output = torch.cat(torch_tensors, dim=-1)
+
+    tt_result = ttnn.to_torch(tt_output)
+    assert_with_pcc(torch_output, tt_result, 0.9999)

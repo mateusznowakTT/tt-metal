@@ -315,3 +315,183 @@ def test_halo_input_memory(device, input_memory_strategy, layout):
 
     tt_result = ttnn.to_torch(tt_output)
     assert tt_result.numel() > 0
+
+
+# =============================================================================
+# Conv2d - mixed memory configs between activation and weight
+# =============================================================================
+
+MIXED_CONFIGS = [
+    ("dram", "l1"),
+    ("l1", "dram"),
+    ("dram", "height_sharded"),
+    ("height_sharded", "dram"),
+    ("l1", "height_sharded"),
+    ("dram", "width_sharded"),
+    ("dram", "block_sharded"),
+    ("height_sharded", "width_sharded"),
+]
+
+
+@pytest.mark.parametrize("activation_mem,weight_mem", MIXED_CONFIGS)
+def test_conv2d_mixed_activation_weight_memory(device, activation_mem, weight_mem):
+    """Test conv2d with activation and weight in different memory configs."""
+    batch_size = 1
+    in_channels = 32
+    out_channels = 32
+    input_h = 32
+    input_w = 32
+    kernel_size = 3
+
+    torch_input = torch.randn(batch_size, in_channels, input_h, input_w, dtype=torch.bfloat16)
+    torch_weight = torch.randn(out_channels, in_channels, kernel_size, kernel_size, dtype=torch.bfloat16)
+
+    torch_input_nhwc = torch_input.permute(0, 2, 3, 1)
+    flat_shape = [1, 1, batch_size * input_h * input_w, in_channels]
+    torch_input_flat = torch_input_nhwc.reshape(flat_shape)
+
+    act_config = make_memory_config(activation_mem, flat_shape)
+    weight_flat_shape = [1, 1, out_channels, in_channels * kernel_size * kernel_size]
+    weight_config = make_memory_config(weight_mem, weight_flat_shape)
+
+    tt_input = ttnn.from_torch(
+        torch_input_flat, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=act_config
+    )
+    tt_weight = ttnn.from_torch(
+        torch_weight, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=weight_config
+    )
+
+    tt_output = ttnn.conv2d(
+        input_tensor=tt_input,
+        weight_tensor=tt_weight,
+        in_channels=in_channels,
+        out_channels=out_channels,
+        device=device,
+        bias_tensor=None,
+        kernel_size=(kernel_size, kernel_size),
+        stride=(1, 1),
+        padding=(1, 1),
+        batch_size=batch_size,
+        input_height=input_h,
+        input_width=input_w,
+    )
+
+    torch_output = torch.nn.functional.conv2d(torch_input.float(), torch_weight.float(), padding=1).bfloat16()
+
+    tt_result = ttnn.to_torch(tt_output)
+    if tt_result.shape != torch_output.shape:
+        torch_output = torch_output.reshape(tt_result.shape)
+
+    assert_with_pcc(torch_output, tt_result, 0.97)
+
+
+@pytest.mark.parametrize(
+    "act_layout,weight_layout",
+    [
+        (ttnn.ROW_MAJOR_LAYOUT, ttnn.ROW_MAJOR_LAYOUT),
+        (ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT),
+        (ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT),
+        (ttnn.TILE_LAYOUT, ttnn.TILE_LAYOUT),
+    ],
+)
+def test_conv2d_mixed_layouts(device, act_layout, weight_layout):
+    """Test conv2d with activation and weight in different layouts."""
+    batch_size = 1
+    in_channels = 32
+    out_channels = 32
+    input_h = 32
+    input_w = 32
+    kernel_size = 3
+
+    torch_input = torch.randn(batch_size, in_channels, input_h, input_w, dtype=torch.bfloat16)
+    torch_weight = torch.randn(out_channels, in_channels, kernel_size, kernel_size, dtype=torch.bfloat16)
+
+    torch_input_nhwc = torch_input.permute(0, 2, 3, 1)
+    flat_shape = [1, 1, batch_size * input_h * input_w, in_channels]
+    torch_input_flat = torch_input_nhwc.reshape(flat_shape)
+
+    tt_input = ttnn.from_torch(torch_input_flat, dtype=ttnn.bfloat16, layout=act_layout, device=device)
+    tt_weight = ttnn.from_torch(torch_weight, dtype=ttnn.bfloat16, layout=weight_layout, device=device)
+
+    tt_output = ttnn.conv2d(
+        input_tensor=tt_input,
+        weight_tensor=tt_weight,
+        in_channels=in_channels,
+        out_channels=out_channels,
+        device=device,
+        bias_tensor=None,
+        kernel_size=(kernel_size, kernel_size),
+        stride=(1, 1),
+        padding=(1, 1),
+        batch_size=batch_size,
+        input_height=input_h,
+        input_width=input_w,
+    )
+
+    torch_output = torch.nn.functional.conv2d(torch_input.float(), torch_weight.float(), padding=1).bfloat16()
+
+    tt_result = ttnn.to_torch(tt_output)
+    if tt_result.shape != torch_output.shape:
+        torch_output = torch_output.reshape(tt_result.shape)
+
+    assert_with_pcc(torch_output, tt_result, 0.97)
+
+
+@pytest.mark.parametrize("activation_mem,bias_mem", MIXED_CONFIGS[:6])
+def test_conv2d_mixed_activation_bias_memory(device, activation_mem, bias_mem):
+    """Test conv2d with activation, weight, and bias all in different memory configs."""
+    batch_size = 1
+    in_channels = 32
+    out_channels = 32
+    input_h = 32
+    input_w = 32
+    kernel_size = 3
+
+    torch_input = torch.randn(batch_size, in_channels, input_h, input_w, dtype=torch.bfloat16)
+    torch_weight = torch.randn(out_channels, in_channels, kernel_size, kernel_size, dtype=torch.bfloat16)
+    torch_bias = torch.randn(out_channels, dtype=torch.bfloat16)
+
+    torch_input_nhwc = torch_input.permute(0, 2, 3, 1)
+    flat_shape = [1, 1, batch_size * input_h * input_w, in_channels]
+    torch_input_flat = torch_input_nhwc.reshape(flat_shape)
+
+    act_config = make_memory_config(activation_mem, flat_shape)
+    bias_shape = [1, 1, 1, out_channels]
+    bias_config = make_memory_config(bias_mem, bias_shape)
+
+    tt_input = ttnn.from_torch(
+        torch_input_flat, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=act_config
+    )
+    tt_weight = ttnn.from_torch(torch_weight, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    tt_bias = ttnn.from_torch(
+        torch_bias.reshape(bias_shape),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=bias_config,
+    )
+
+    tt_output = ttnn.conv2d(
+        input_tensor=tt_input,
+        weight_tensor=tt_weight,
+        in_channels=in_channels,
+        out_channels=out_channels,
+        device=device,
+        bias_tensor=tt_bias,
+        kernel_size=(kernel_size, kernel_size),
+        stride=(1, 1),
+        padding=(1, 1),
+        batch_size=batch_size,
+        input_height=input_h,
+        input_width=input_w,
+    )
+
+    torch_output = torch.nn.functional.conv2d(
+        torch_input.float(), torch_weight.float(), torch_bias.float(), padding=1
+    ).bfloat16()
+
+    tt_result = ttnn.to_torch(tt_output)
+    if tt_result.shape != torch_output.shape:
+        torch_output = torch_output.reshape(tt_result.shape)
+
+    assert_with_pcc(torch_output, tt_result, 0.97)
