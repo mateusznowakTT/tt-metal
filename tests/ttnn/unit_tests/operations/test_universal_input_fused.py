@@ -468,30 +468,8 @@ def test_layernorm_mixed_input_residual(device, input_mem, residual_mem):
     assert_with_pcc(torch_output, tt_result, 0.98)
 
 
-@pytest.mark.parametrize("input_mem,mask_mem", MIXED_CONFIGS)
-def test_softmax_mixed_input_mask(device, input_mem, mask_mem):
-    """Test softmax with input and mask in different memory configs."""
-    shape = [1, 1, 128, 128]
-    torch_input = torch.randn(shape, dtype=torch.bfloat16)
-    # Mask: 0 = keep, large negative = mask out
-    torch_mask = torch.zeros(shape, dtype=torch.bfloat16)
-    torch_mask[:, :, :, 64:] = -1e4
-
-    input_config = make_memory_config(input_mem, shape)
-    mask_config = make_memory_config(mask_mem, shape)
-
-    tt_input = ttnn.from_torch(
-        torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=input_config
-    )
-    tt_mask = ttnn.from_torch(
-        torch_mask, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mask_config
-    )
-
-    tt_output = ttnn.softmax(tt_input, mask=tt_mask, dim=-1)
-    torch_output = torch.softmax((torch_input.float() + torch_mask.float()), dim=-1).bfloat16()
-
-    tt_result = ttnn.to_torch(tt_output)
-    assert_with_pcc(torch_output, tt_result, 0.98)
+# NOTE: softmax mask test removed - ttnn.softmax doesn't accept a `mask` parameter.
+# Masked softmax is done via ttnn.scale_mask_softmax (separate op).
 
 
 @pytest.mark.parametrize(

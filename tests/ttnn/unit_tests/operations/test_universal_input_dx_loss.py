@@ -72,8 +72,15 @@ BOTH_LAYOUTS = [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT]
 
 @pytest.mark.parametrize("memory_strategy", ALL_MEMORY_STRATEGIES)
 @pytest.mark.parametrize("layout", BOTH_LAYOUTS)
-@pytest.mark.parametrize("reduction", ["none", "sum", "mean"])
-def test_mse_loss(device, memory_strategy, layout, reduction):
+@pytest.mark.parametrize(
+    "reduction_mode,reduction_str",
+    [
+        (ttnn.LossReductionMode.NONE, "none"),
+        (ttnn.LossReductionMode.SUM, "sum"),
+        (ttnn.LossReductionMode.MEAN, "mean"),
+    ],
+)
+def test_mse_loss(device, memory_strategy, layout, reduction_mode, reduction_str):
     """Test mse_loss with all memory configs, layouts, and reductions."""
     shape = [1, 1, 64, 64]
     torch_input = torch.randn(shape, dtype=torch.bfloat16)
@@ -85,9 +92,9 @@ def test_mse_loss(device, memory_strategy, layout, reduction):
         torch_target, dtype=ttnn.bfloat16, layout=layout, device=device, memory_config=mem_config
     )
 
-    tt_output = ttnn.mse_loss(tt_input, tt_target, reduction=reduction)
+    tt_output = ttnn.mse_loss(tt_input, tt_target, reduction=reduction_mode)
     torch_output = torch.nn.functional.mse_loss(
-        torch_input.float(), torch_target.float(), reduction=reduction
+        torch_input.float(), torch_target.float(), reduction=reduction_str
     ).bfloat16()
 
     tt_result = ttnn.to_torch(tt_output)
@@ -104,8 +111,15 @@ def test_mse_loss(device, memory_strategy, layout, reduction):
 
 @pytest.mark.parametrize("memory_strategy", ALL_MEMORY_STRATEGIES)
 @pytest.mark.parametrize("layout", BOTH_LAYOUTS)
-@pytest.mark.parametrize("reduction", ["none", "sum", "mean"])
-def test_l1_loss(device, memory_strategy, layout, reduction):
+@pytest.mark.parametrize(
+    "reduction_mode,reduction_str",
+    [
+        (ttnn.LossReductionMode.NONE, "none"),
+        (ttnn.LossReductionMode.SUM, "sum"),
+        (ttnn.LossReductionMode.MEAN, "mean"),
+    ],
+)
+def test_l1_loss(device, memory_strategy, layout, reduction_mode, reduction_str):
     """Test l1_loss with all memory configs, layouts, and reductions."""
     shape = [1, 1, 64, 64]
     torch_input = torch.randn(shape, dtype=torch.bfloat16)
@@ -117,9 +131,9 @@ def test_l1_loss(device, memory_strategy, layout, reduction):
         torch_target, dtype=ttnn.bfloat16, layout=layout, device=device, memory_config=mem_config
     )
 
-    tt_output = ttnn.l1_loss(tt_input, tt_target, reduction=reduction)
+    tt_output = ttnn.l1_loss(tt_input, tt_target, reduction=reduction_mode)
     torch_output = torch.nn.functional.l1_loss(
-        torch_input.float(), torch_target.float(), reduction=reduction
+        torch_input.float(), torch_target.float(), reduction=reduction_str
     ).bfloat16()
 
     tt_result = ttnn.to_torch(tt_output)

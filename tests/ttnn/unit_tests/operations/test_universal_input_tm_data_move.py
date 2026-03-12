@@ -106,7 +106,7 @@ def test_gather_tile(device, memory_strategy):
         torch_indices, dtype=ttnn.uint32, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem_config
     )
 
-    tt_output = ttnn.gather(tt_input, tt_indices, dim=-1)
+    tt_output = ttnn.gather(tt_input, -1, tt_indices)
     torch_output = torch.gather(torch_input, -1, torch_indices.long())
 
     tt_result = ttnn.to_torch(tt_output)
@@ -128,7 +128,7 @@ def test_gather_rm(device, memory_strategy):
         torch_indices, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=mem_config
     )
 
-    tt_output = ttnn.gather(tt_input, tt_indices, dim=-1)
+    tt_output = ttnn.gather(tt_input, -1, tt_indices)
     torch_output = torch.gather(torch_input, -1, torch_indices.long())
 
     tt_result = ttnn.to_torch(tt_output)

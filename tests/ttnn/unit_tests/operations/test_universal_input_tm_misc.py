@@ -122,10 +122,10 @@ def test_indexed_fill_tile(device, memory_strategy):
 
 @pytest.mark.parametrize("memory_strategy", ALL_MEMORY_STRATEGIES)
 def test_non_zero_indices(device, memory_strategy):
-    """Test non_zero_indices with ROW_MAJOR across all memory configs."""
+    """Test non_zero_indices with ROW_MAJOR across all memory configs.
+    nonzero requires shape [1,1,1,W] in RM layout and returns a list of tensors."""
     shape = [1, 1, 1, 128]
     torch_input = torch.zeros(shape, dtype=torch.bfloat16)
-    # Set some elements to non-zero
     torch_input[0, 0, 0, 10] = 1.0
     torch_input[0, 0, 0, 50] = 2.0
     torch_input[0, 0, 0, 100] = 3.0
@@ -136,13 +136,19 @@ def test_non_zero_indices(device, memory_strategy):
     )
 
     tt_output = ttnn.nonzero(tt_input)
-    tt_result = ttnn.to_torch(tt_output)
+    # nonzero returns a list of tensors
+    if isinstance(tt_output, (list, tuple)):
+        assert len(tt_output) > 0
+        tt_result = ttnn.to_torch(tt_output[0])
+    else:
+        tt_result = ttnn.to_torch(tt_output)
     assert tt_result.numel() > 0
 
 
 @pytest.mark.parametrize("memory_strategy", ALL_MEMORY_STRATEGIES)
 def test_non_zero_indices_tile(device, memory_strategy):
-    """Test non_zero_indices with TILE layout across all memory configs."""
+    """Test non_zero_indices with TILE layout across all memory configs.
+    nonzero requires [1,1,1,W] RM input - TILE layout tests universal support."""
     shape = [1, 1, 1, 128]
     torch_input = torch.zeros(shape, dtype=torch.bfloat16)
     torch_input[0, 0, 0, 10] = 1.0
@@ -154,7 +160,11 @@ def test_non_zero_indices_tile(device, memory_strategy):
     )
 
     tt_output = ttnn.nonzero(tt_input)
-    tt_result = ttnn.to_torch(tt_output)
+    if isinstance(tt_output, (list, tuple)):
+        assert len(tt_output) > 0
+        tt_result = ttnn.to_torch(tt_output[0])
+    else:
+        tt_result = ttnn.to_torch(tt_output)
     assert tt_result.numel() > 0
 
 

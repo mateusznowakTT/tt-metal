@@ -162,7 +162,7 @@ def test_roll(device, memory_strategy, layout):
     mem_config = make_memory_config(memory_strategy, shape)
     tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=layout, device=device, memory_config=mem_config)
 
-    tt_output = ttnn.roll(tt_input, shifts=16, dims=-1)
+    tt_output = ttnn.roll(tt_input, shifts=16, dim=-1)
     torch_output = torch.roll(torch_input, shifts=16, dims=-1)
 
     tt_result = ttnn.to_torch(tt_output)
