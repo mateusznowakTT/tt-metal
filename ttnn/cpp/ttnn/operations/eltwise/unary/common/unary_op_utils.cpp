@@ -49,14 +49,17 @@ std::string get_macro_definition(UnaryOpType op_type) {
         case UnaryOpType::LOGICAL_NOT_UNARY: return "SFPU_OP_LOGICAL_NOT_INCLUDE";
         case UnaryOpType::I0: return "SFPU_OP_I0_INCLUDE";
         case UnaryOpType::I1: return "SFPU_OP_I1_INCLUDE";
+        case UnaryOpType::ACOS:
         case UnaryOpType::ACOSH:
+        case UnaryOpType::ASIN:
+        case UnaryOpType::ASINH:
+        case UnaryOpType::ATAN:
+        case UnaryOpType::ATANH:
         case UnaryOpType::COS:
         case UnaryOpType::COSH:
-        case UnaryOpType::SINH:
         case UnaryOpType::SIN:
-        case UnaryOpType::ASINH:
-        case UnaryOpType::TAN:
-        case UnaryOpType::ATANH: return "SFPU_OP_TRIG_FAMILY_INCLUDE";
+        case UnaryOpType::SINH:
+        case UnaryOpType::TAN: return "SFPU_OP_TRIG_FAMILY_INCLUDE";
         case UnaryOpType::NEG: return "SFPU_OP_NEG_INCLUDE";
         case UnaryOpType::SOFTPLUS: return "SFPU_OP_SOFTPLUS_INCLUDE";
         case UnaryOpType::XIELU: return "SFPU_OP_XIELU_INCLUDE";
@@ -96,6 +99,7 @@ std::string get_macro_definition(UnaryOpType op_type) {
         case UnaryOpType::HARDTANH: return "SFPU_OP_HARDTANH_INCLUDE";
         case UnaryOpType::RPOW: return "SFPU_OP_RPOW_INCLUDE";
         case UnaryOpType::HARDMISH: return "SFPU_OP_HARDMISH_INCLUDE";
+        case UnaryOpType::LGAMMA: return "SFPU_OP_LGAMMA_INCLUDE";
         default: return "SFPU_OP_COMPUTE_KERNEL_API_INCLUDE";
     };
 }
@@ -565,6 +569,8 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                 fmt::format("hardmish_tile_init<{}u>();", (uint32_t)param0),
                 fmt::format("hardmish_tile<{1}u>({0});", idst, (uint32_t)param0)};
         }
+        case UnaryOpType::MISH:
+            return {};// MISH uses dedicated mish_kernel.cpp;
         case UnaryOpType::RSQRT: {
             return {"rsqrt_tile_init<false>();", fmt::format("rsqrt_tile<false, {1}>({0});", idst, param0_raw)};
         }
@@ -761,7 +767,7 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
             return {"alt_complex_rotate90_tile_init();", fmt::format("alt_complex_rotate90_tile({});", idst)};
         case UnaryOpType::HARDSIGMOID: return {"hardsigmoid_tile_init();", fmt::format("hardsigmoid_tile({});", idst)};
         case UnaryOpType::SOFTSIGN: return {"softsign_tile_init();", fmt::format("softsign_tile({});", idst)};
-        case UnaryOpType::MISH:
+        case UnaryOpType::LGAMMA:
         case UnaryOpType::IDENTITY:
         case UnaryOpType::BITCAST:
             // Bitcast uses identity kernel (copy_tile + pack_tile) - no LLK needed
@@ -888,7 +894,10 @@ UnaryWithParam string_to_unary_with_param(const std::string& name) {
         return UnaryWithParam(UnaryOpType::HARDMISH, static_cast<float>(true));
     }
     if (name == "mish") {
-        return UnaryWithParam(UnaryOpType::MISH);
+        return UnaryWithParam(UnaryOpType::MISH, static_cast<float>(false));
+    }
+    if (name == "mish_approx") {
+        return UnaryWithParam(UnaryOpType::MISH, static_cast<float>(true));
     }
     TT_THROW("Unknown unary op: {}", name);
 }
@@ -976,6 +985,7 @@ void update_macro_defines(UnaryOpType op_type, std::map<std::string, std::string
 
 std::string_view get_compute_kernel_path(UnaryOpType op_type, std::optional<DataType> input_dtype) {
     switch (op_type) {
+        case UnaryOpType::LGAMMA: return "lgamma_kernel.cpp";
         case UnaryOpType::MISH: return "mish_kernel.cpp";
         case UnaryOpType::TANHSHRINK:
             if (input_dtype.has_value() && input_dtype.value() == DataType::FLOAT32) {
@@ -1011,10 +1021,18 @@ std::uint32_t pack_scalar_runtime_arg_impl(float param, DataType dtype) {
     return std::bit_cast<std::uint32_t>(param);
 }
 
-std::uint32_t pack_scalar_runtime_arg_impl(std::uint32_t param, DataType /*dtype*/) { return param; }
+std::uint32_t pack_scalar_runtime_arg_impl(std::uint32_t param, DataType dtype) {
+    if (dtype == DataType::INT32 || dtype == DataType::UINT32) {
+        return param;
+    }
+    return std::bit_cast<std::uint32_t>(static_cast<float>(param));
+}
 
-std::uint32_t pack_scalar_runtime_arg_impl(std::int32_t param, DataType /*dtype*/) {
-    return std::bit_cast<std::uint32_t>(param);
+std::uint32_t pack_scalar_runtime_arg_impl(std::int32_t param, DataType dtype) {
+    if (dtype == DataType::INT32 || dtype == DataType::UINT32) {
+        return std::bit_cast<std::uint32_t>(param);
+    }
+    return std::bit_cast<std::uint32_t>(static_cast<float>(param));
 }
 
 uint32_t pack_scalar_runtime_arg(const EltwiseUnaryWithParam& op, size_t index, DataType dtype) {
