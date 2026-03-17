@@ -90,11 +90,22 @@ def _run_binary_op(device, ttnn_fn_name, shape_a, shape_b, in_dtype, out_dtype=N
     torch.manual_seed(42)
     ttnn_op = getattr(ttnn, ttnn_fn_name)
 
-    torch_a = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=torch.bfloat16), in_dtype)(shape_a)
-    torch_b = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=torch.bfloat16), in_dtype)(shape_b)
+    # bfloat4_b division needs a narrow, positive range: 4-bit mantissa has
+    # ~6.25% relative error, division roughly doubles that.  Keeping both
+    # operands in [1, 8] avoids catastrophic amplification from small divisors.
+    is_low_prec_div = ttnn_fn_name == "divide" and in_dtype == ttnn.bfloat4_b
+    a_low, a_high = (1, 8) if is_low_prec_div else (-50, 50)
+    b_low, b_high = (1, 8) if is_low_prec_div else (-50, 50)
+
+    torch_a = gen_func_with_cast_tt(partial(torch_random, low=a_low, high=a_high, dtype=torch.bfloat16), in_dtype)(
+        shape_a
+    )
+    torch_b = gen_func_with_cast_tt(partial(torch_random, low=b_low, high=b_high, dtype=torch.bfloat16), in_dtype)(
+        shape_b
+    )
 
     # Avoid division by zero
-    if ttnn_fn_name == "divide":
+    if ttnn_fn_name == "divide" and not is_low_prec_div:
         torch_b[torch_b.abs() < 0.5] = 1.0
 
     tt_a = ttnn.from_torch(
@@ -134,11 +145,15 @@ def _run_binary_op(device, ttnn_fn_name, shape_a, shape_b, in_dtype, out_dtype=N
 def test_block_format_no_subtile_broadcast_correctness(input_shapes, ttnn_fn, block_dtype, device):
     """Block-format inputs with non-subtile-broadcast shapes must produce
     correct results for ops that currently rely on composite typecast."""
-    if block_dtype == ttnn.bfloat4_b and ttnn_fn == "divide":
-        pytest.skip("bfloat4_b has insufficient precision for division (4-bit mantissa)")
     shape_a, shape_b = input_shapes
     torch_golden, tt_result = _run_binary_op(device, ttnn_fn, shape_a, shape_b, block_dtype)
-    assert_with_pcc(torch_golden, tt_result, 0.99 if block_dtype != ttnn.bfloat4_b else 0.98)
+    # bfloat4_b divide uses a narrow input range and has ~12.5% relative error
+    pcc = (
+        0.94
+        if (block_dtype == ttnn.bfloat4_b and ttnn_fn == "divide")
+        else (0.98 if block_dtype == ttnn.bfloat4_b else 0.99)
+    )
+    assert_with_pcc(torch_golden, tt_result, pcc)
 
 
 @pytest.mark.parametrize("input_shapes", NON_SUBTILE_BROADCAST_SHAPES)
