@@ -67,8 +67,7 @@ void kernel_main() {
 #if FP32_DEST_ACC_EN && !defined(TYPECAST_OUTPUT_32BIT)
     disable_fp32_dest_acc();
 #endif
-    constexpr auto stall_until_config_done = []() { TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH | p_stall::PACK); };
-    PACK((stall_until_config_done()));
+    PACK(([]() { TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH | p_stall::PACK); }()));
 
     for (uint32_t block_index = 0; block_index < per_core_block_cnt; block_index++) {
         cb_out.reserve_back(per_core_block_dim);
@@ -93,8 +92,7 @@ void kernel_main() {
 
 #if FP32_DEST_ACC_EN
     disable_fp32_dest_acc();
-    constexpr auto stall_until_config_done = []() { TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH | p_stall::PACK); };
-    PACK((stall_until_config_done()));
+    PACK(([]() { TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH | p_stall::PACK); }()));
 #endif
 
     pack_untilize_dest_init<per_core_block_dim>(output_cb);
